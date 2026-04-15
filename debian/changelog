@@ -1,0 +1,15 @@
+pve-gpu-sched (0.2.0-1) stable; urgency=medium
+
+  * Initial Debian package release
+  * BAND scheduler with Weighted Fair Queuing (WFQ)
+  * VFIO mediated device (mdev) interface for KVM/Proxmox VE
+  * Shadow page tables for GPU memory isolation
+  * IRQ forwarding via eventfd
+  * Support for NVIDIA (Fermi/Kepler/Maxwell/Pascal/Turing/Ampere/Ada)
+  * Support for AMD (GCN/RDNA)
+  * Up to 16 concurrent VMs sharing a single GPU
+  * CLI management tool (pve-gpu-sched)
+  * DKMS support for automatic kernel module rebuild
+  * systemd service for auto-loading
+
+ -- PVE GPU Scheduler Project <gpu-sched@proxmox.local>  Tue, 15 Apr 2026 00:00:00 +0000

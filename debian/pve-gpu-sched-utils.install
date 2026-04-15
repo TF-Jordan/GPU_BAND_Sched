@@ -1,0 +1,3 @@
+scripts/pve-gpu-sched usr/bin/
+conf/pve-gpu-sched.conf etc/modprobe.d/
+conf/pve-gpu-sched.service lib/systemd/system/

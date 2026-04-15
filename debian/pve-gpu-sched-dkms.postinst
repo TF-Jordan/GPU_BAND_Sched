@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+PACKAGE_NAME="pve-gpu-sched"
+PACKAGE_VERSION="0.2.0"
+
+case "$1" in
+    configure)
+        if [ -x /usr/sbin/dkms ]; then
+            # Remove old DKMS module if present
+            dkms remove -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" --all 2>/dev/null || true
+
+            # Add and build the module
+            dkms add -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" 2>/dev/null || true
+            dkms build -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" || true
+            dkms install -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

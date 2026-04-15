@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+PACKAGE_NAME="pve-gpu-sched"
+PACKAGE_VERSION="0.2.0"
+
+case "$1" in
+    remove|purge)
+        if [ -x /usr/sbin/dkms ]; then
+            dkms remove -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" --all 2>/dev/null || true
+        fi
+
+        # Unload the module if loaded
+        if lsmod | grep -q pve_gpu_sched; then
+            rmmod pve_gpu_sched 2>/dev/null || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

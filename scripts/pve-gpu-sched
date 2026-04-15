@@ -1,0 +1,453 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+pve-gpu-sched — CLI pour gerer les instances GPU virtuelles (mdev)
+
+Usage:
+    pve-gpu-sched status                  Afficher l'etat du GPU et des VMs
+    pve-gpu-sched create <vmid>           Creer une instance GPU pour une VM
+    pve-gpu-sched destroy <vmid>          Supprimer l'instance GPU d'une VM
+    pve-gpu-sched list                    Lister les instances GPU actives
+    pve-gpu-sched detect                  Detecter les GPUs compatibles
+    pve-gpu-sched load                    Charger le module kernel
+    pve-gpu-sched unload                  Decharger le module kernel
+"""
+
+import argparse
+import glob
+import os
+import subprocess
+import sys
+import uuid
+
+
+# --- Constants ---
+
+MODULE_NAME = "pve_gpu_sched"
+MDEV_TYPE = "pvegpu-sched"
+SYSFS_MDEV_BASE = "/sys/bus/mdev/devices"
+SYSFS_PCI_BASE = "/sys/bus/pci/devices"
+GPU_PCI_CLASSES = ["0x030000", "0x030200"]
+GPU_VENDORS = {
+    "0x10de": "NVIDIA",
+    "0x1002": "AMD",
+}
+
+
+def run(cmd, check=True, capture=True):
+    """Execute a shell command."""
+    result = subprocess.run(
+        cmd, shell=True, capture_output=capture, text=True
+    )
+    if check and result.returncode != 0:
+        if result.stderr:
+            print(f"Erreur: {result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    return result
+
+
+def is_module_loaded():
+    """Check if the kernel module is loaded."""
+    result = run(f"lsmod | grep -q {MODULE_NAME}", check=False)
+    return result.returncode == 0
+
+
+def find_gpu_devices():
+    """Find compatible GPU PCI devices."""
+    gpus = []
+    for pci_path in sorted(glob.glob(f"{SYSFS_PCI_BASE}/*")):
+        class_path = os.path.join(pci_path, "class")
+        vendor_path = os.path.join(pci_path, "vendor")
+        device_path = os.path.join(pci_path, "device")
+
+        if not all(os.path.exists(p) for p in [class_path, vendor_path]):
+            continue
+
+        with open(class_path) as f:
+            pci_class = f.read().strip()
+
+        # Match GPU display classes (0x0300xx or 0x0302xx)
+        if pci_class[:8] not in ["0x030000", "0x030200"]:
+            continue
+
+        with open(vendor_path) as f:
+            vendor = f.read().strip()
+
+        if vendor not in GPU_VENDORS:
+            continue
+
+        device_id = ""
+        if os.path.exists(device_path):
+            with open(device_path) as f:
+                device_id = f.read().strip()
+
+        bdf = os.path.basename(pci_path)
+        gpus.append({
+            "bdf": bdf,
+            "vendor": vendor,
+            "vendor_name": GPU_VENDORS[vendor],
+            "device": device_id,
+            "class": pci_class,
+            "sysfs": pci_path,
+        })
+
+    return gpus
+
+
+def find_mdev_parent():
+    """Find the mdev parent device (GPU with pve_gpu_sched driver)."""
+    for gpu in find_gpu_devices():
+        mdev_supported = os.path.join(gpu["sysfs"], "mdev_supported_types")
+        if os.path.isdir(mdev_supported):
+            return gpu
+    return None
+
+
+def generate_mdev_uuid(vmid):
+    """Generate a deterministic UUID for a VM.
+
+    Format: 00000001-0000-0000-0000-{vmid:012d}
+    This allows extracting the vmid from the UUID.
+    """
+    return f"00000001-0000-0000-0000-{int(vmid):012d}"
+
+
+def get_active_mdevs():
+    """List active mdev instances."""
+    mdevs = []
+    if not os.path.isdir(SYSFS_MDEV_BASE):
+        return mdevs
+
+    for entry in sorted(os.listdir(SYSFS_MDEV_BASE)):
+        mdev_path = os.path.join(SYSFS_MDEV_BASE, entry)
+        if not os.path.islink(mdev_path):
+            continue
+
+        # Extract vmid from UUID
+        parts = entry.split("-")
+        vmid = "?"
+        if len(parts) == 5:
+            try:
+                vmid = str(int(parts[4]))
+            except ValueError:
+                vmid = "?"
+
+        mdevs.append({
+            "uuid": entry,
+            "vmid": vmid,
+            "sysfs": os.path.realpath(mdev_path),
+        })
+
+    return mdevs
+
+
+# --- Commands ---
+
+def cmd_detect(args):
+    """Detect compatible GPUs."""
+    gpus = find_gpu_devices()
+    if not gpus:
+        print("Aucun GPU compatible detecte.")
+        print("GPUs supportes : NVIDIA (Fermi+) et AMD (GCN+)")
+        sys.exit(1)
+
+    print(f"GPUs compatibles detectes : {len(gpus)}")
+    print()
+    for gpu in gpus:
+        driver_path = os.path.join(gpu["sysfs"], "driver")
+        driver = "aucun"
+        if os.path.islink(driver_path):
+            driver = os.path.basename(os.readlink(driver_path))
+
+        mdev_ok = os.path.isdir(
+            os.path.join(gpu["sysfs"], "mdev_supported_types")
+        )
+
+        print(f"  [{gpu['bdf']}] {gpu['vendor_name']} {gpu['device']}")
+        print(f"    Classe PCI : {gpu['class']}")
+        print(f"    Driver     : {driver}")
+        print(f"    mdev pret  : {'oui' if mdev_ok else 'non'}")
+        print()
+
+
+def cmd_status(args):
+    """Show module and GPU status."""
+    print("=== PVE GPU Scheduler - Status ===")
+    print()
+
+    # Module status
+    loaded = is_module_loaded()
+    print(f"Module kernel : {'charge' if loaded else 'non charge'}")
+
+    if loaded:
+        result = run(f"modinfo {MODULE_NAME} 2>/dev/null | head -5",
+                     check=False)
+        if result.stdout:
+            for line in result.stdout.strip().split("\n"):
+                print(f"  {line}")
+    print()
+
+    # GPU detection
+    gpus = find_gpu_devices()
+    print(f"GPUs detectes : {len(gpus)}")
+    for gpu in gpus:
+        print(f"  [{gpu['bdf']}] {gpu['vendor_name']} {gpu['device']}")
+
+    parent = find_mdev_parent()
+    if parent:
+        print(f"\nGPU mdev actif : [{parent['bdf']}] {parent['vendor_name']}")
+
+        # Available instances
+        mdev_types_path = os.path.join(
+            parent["sysfs"], "mdev_supported_types"
+        )
+        for mtype in sorted(os.listdir(mdev_types_path)):
+            avail_path = os.path.join(
+                mdev_types_path, mtype, "available_instances"
+            )
+            desc_path = os.path.join(mdev_types_path, mtype, "description")
+            if os.path.exists(avail_path):
+                with open(avail_path) as f:
+                    avail = f.read().strip()
+                print(f"  Type: {mtype}, Instances disponibles: {avail}")
+            if os.path.exists(desc_path):
+                with open(desc_path) as f:
+                    desc = f.read().strip()
+                for line in desc.split("\n"):
+                    print(f"    {line}")
+    print()
+
+    # Active mdev instances
+    mdevs = get_active_mdevs()
+    print(f"Instances GPU actives : {len(mdevs)}")
+    for mdev in mdevs:
+        print(f"  UUID: {mdev['uuid']}  VMID: {mdev['vmid']}")
+    print()
+
+    # Kernel log
+    result = run(
+        "dmesg | grep pve_gpu_sched | tail -5 2>/dev/null", check=False
+    )
+    if result.stdout and result.stdout.strip():
+        print("Derniers messages kernel :")
+        for line in result.stdout.strip().split("\n"):
+            print(f"  {line}")
+
+
+def cmd_create(args):
+    """Create an mdev GPU instance for a VM."""
+    vmid = args.vmid
+
+    if not is_module_loaded():
+        print("Erreur: le module pve_gpu_sched n'est pas charge.")
+        print("Lancez: pve-gpu-sched load")
+        sys.exit(1)
+
+    parent = find_mdev_parent()
+    if not parent:
+        print("Erreur: aucun GPU avec support mdev detecte.")
+        print("Verifiez que le module est charge et qu'un GPU est present.")
+        sys.exit(1)
+
+    mdev_uuid = generate_mdev_uuid(vmid)
+
+    # Check if already exists
+    mdev_path = os.path.join(SYSFS_MDEV_BASE, mdev_uuid)
+    if os.path.exists(mdev_path):
+        print(f"Instance GPU deja active pour VMID {vmid} (UUID: {mdev_uuid})")
+        return
+
+    # Find the mdev type directory
+    mdev_types_path = os.path.join(parent["sysfs"], "mdev_supported_types")
+    type_dirs = os.listdir(mdev_types_path)
+    if not type_dirs:
+        print("Erreur: aucun type mdev disponible sur le GPU.")
+        sys.exit(1)
+
+    # Use the first available type
+    mdev_type_dir = os.path.join(mdev_types_path, type_dirs[0])
+    create_path = os.path.join(mdev_type_dir, "create")
+
+    print(f"Creation de l'instance GPU pour VMID {vmid}...")
+    print(f"  UUID   : {mdev_uuid}")
+    print(f"  GPU    : [{parent['bdf']}] {parent['vendor_name']}")
+    print(f"  Type   : {type_dirs[0]}")
+
+    try:
+        with open(create_path, "w") as f:
+            f.write(mdev_uuid)
+        print(f"  Status : OK")
+        print()
+        print(f"Pour attacher a la VM (qm set) :")
+        print(f"  qm set {vmid} -hostpci0 {parent['bdf']},mdev={mdev_uuid}")
+    except PermissionError:
+        print("Erreur: permission refusee. Lancez en tant que root.")
+        sys.exit(1)
+    except OSError as e:
+        print(f"Erreur: creation mdev echouee: {e}")
+        sys.exit(1)
+
+
+def cmd_destroy(args):
+    """Destroy an mdev GPU instance."""
+    vmid = args.vmid
+    mdev_uuid = generate_mdev_uuid(vmid)
+    mdev_path = os.path.join(SYSFS_MDEV_BASE, mdev_uuid)
+
+    if not os.path.exists(mdev_path):
+        print(f"Aucune instance GPU active pour VMID {vmid}")
+        return
+
+    remove_path = os.path.join(mdev_path, "remove")
+
+    print(f"Suppression de l'instance GPU pour VMID {vmid}...")
+    print(f"  UUID: {mdev_uuid}")
+
+    try:
+        with open(remove_path, "w") as f:
+            f.write("1")
+        print(f"  Status : OK")
+    except PermissionError:
+        print("Erreur: permission refusee. Lancez en tant que root.")
+        sys.exit(1)
+    except OSError as e:
+        print(f"Erreur: suppression mdev echouee: {e}")
+        sys.exit(1)
+
+
+def cmd_list(args):
+    """List active mdev GPU instances."""
+    mdevs = get_active_mdevs()
+    if not mdevs:
+        print("Aucune instance GPU active.")
+        return
+
+    print(f"Instances GPU actives : {len(mdevs)}")
+    print()
+    print(f"{'VMID':<10} {'UUID':<40} {'Path'}")
+    print("-" * 90)
+    for mdev in mdevs:
+        print(f"{mdev['vmid']:<10} {mdev['uuid']:<40} {mdev['sysfs']}")
+
+
+def cmd_load(args):
+    """Load the kernel module."""
+    if is_module_loaded():
+        print("Module pve_gpu_sched deja charge.")
+        return
+
+    print("Chargement du module pve_gpu_sched...")
+
+    # Load dependencies
+    run("modprobe vfio 2>/dev/null || true", check=False)
+    run("modprobe vfio_pci 2>/dev/null || true", check=False)
+    run("modprobe mdev 2>/dev/null || true", check=False)
+
+    result = run(f"modprobe {MODULE_NAME}", check=False)
+    if result.returncode != 0:
+        print(f"Erreur: impossible de charger le module.")
+        if result.stderr:
+            print(f"  {result.stderr.strip()}")
+        print("Verifiez que le module est compile (dkms status).")
+        sys.exit(1)
+
+    print("Module charge avec succes.")
+    run("dmesg | grep pve_gpu_sched | tail -3", check=False)
+
+
+def cmd_unload(args):
+    """Unload the kernel module."""
+    if not is_module_loaded():
+        print("Module pve_gpu_sched non charge.")
+        return
+
+    # Check for active mdevs
+    mdevs = get_active_mdevs()
+    if mdevs:
+        print(f"Attention: {len(mdevs)} instance(s) GPU active(s).")
+        print("Supprimez-les d'abord avec: pve-gpu-sched destroy <vmid>")
+        sys.exit(1)
+
+    print("Dechargement du module pve_gpu_sched...")
+    result = run(f"rmmod {MODULE_NAME}", check=False)
+    if result.returncode != 0:
+        print(f"Erreur: impossible de decharger le module.")
+        if result.stderr:
+            print(f"  {result.stderr.strip()}")
+        sys.exit(1)
+
+    print("Module decharge avec succes.")
+
+
+# --- Main ---
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="pve-gpu-sched",
+        description="Gestion du GPU scheduler pour Proxmox VE / KVM.\n"
+                    "Permet de partager un GPU entre plusieurs VMs "
+                    "via l'algorithme BAND.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Exemples :
+  pve-gpu-sched detect            Detecter les GPUs compatibles
+  pve-gpu-sched load              Charger le module kernel
+  pve-gpu-sched create 100        Creer une instance GPU pour la VM 100
+  pve-gpu-sched create 101        Creer une instance GPU pour la VM 101
+  pve-gpu-sched list              Voir les instances actives
+  pve-gpu-sched status            Etat complet du systeme
+  pve-gpu-sched destroy 100       Supprimer l'instance de la VM 100
+  pve-gpu-sched unload            Decharger le module
+""",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Commande")
+
+    # detect
+    subparsers.add_parser("detect", help="Detecter les GPUs compatibles")
+
+    # status
+    subparsers.add_parser("status", help="Afficher l'etat du systeme")
+
+    # create
+    p_create = subparsers.add_parser(
+        "create", help="Creer une instance GPU pour une VM"
+    )
+    p_create.add_argument("vmid", type=int, help="VMID Proxmox de la VM")
+
+    # destroy
+    p_destroy = subparsers.add_parser(
+        "destroy", help="Supprimer l'instance GPU d'une VM"
+    )
+    p_destroy.add_argument("vmid", type=int, help="VMID Proxmox de la VM")
+
+    # list
+    subparsers.add_parser("list", help="Lister les instances actives")
+
+    # load
+    subparsers.add_parser("load", help="Charger le module kernel")
+
+    # unload
+    subparsers.add_parser("unload", help="Decharger le module kernel")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    commands = {
+        "detect": cmd_detect,
+        "status": cmd_status,
+        "create": cmd_create,
+        "destroy": cmd_destroy,
+        "list": cmd_list,
+        "load": cmd_load,
+        "unload": cmd_unload,
+    }
+
+    commands[args.command](args)
+
+
+if __name__ == "__main__":
+    main()

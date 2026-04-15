@@ -1,0 +1,37 @@
+Source: pve-gpu-sched
+Section: kernel
+Priority: optional
+Maintainer: PVE GPU Scheduler Project <gpu-sched@proxmox.local>
+Build-Depends: debhelper (>= 12), dkms
+Standards-Version: 4.5.1
+Homepage: https://github.com/tf-jordan/gpu_band_sched
+
+Package: pve-gpu-sched-dkms
+Architecture: all
+Depends: ${misc:Depends}, dkms, linux-headers-amd64 | linux-headers-generic
+Recommends: proxmox-ve
+Description: GPU time-sharing scheduler for Proxmox VE / KVM (DKMS)
+ Module kernel mdev (VFIO mediated device) qui intercepte les acces
+ MMIO des VMs vers le GPU physique et les ordonnance via l'algorithme
+ BAND (Bandwidth-Aware Non-preemptive Dispatcher).
+ .
+ Permet a plusieurs VMs de partager un meme GPU physique (NVIDIA ou AMD)
+ sans licence vGPU, via un scheduling equitable pondere (WFQ).
+ .
+ Fonctionnalites :
+  - Scheduling BAND avec Weighted Fair Queuing
+  - Shadow page tables GPU (NVC0/GCN)
+  - IRQ forwarding via eventfd
+  - Support NVIDIA (Fermi+) et AMD (GCN+)
+  - Jusqu'a 16 VMs simultanees
+  - Outil CLI pour gerer les instances mdev
+
+Package: pve-gpu-sched-utils
+Architecture: all
+Depends: ${misc:Depends}, python3, pve-gpu-sched-dkms
+Recommends: proxmox-ve, qemu-server
+Description: GPU time-sharing scheduler - management utilities
+ Outils de gestion pour le module pve-gpu-sched :
+  - pve-gpu-sched : CLI pour creer/supprimer/lister les instances mdev GPU
+  - Configuration modprobe et service systemd
+  - Integration Proxmox VE

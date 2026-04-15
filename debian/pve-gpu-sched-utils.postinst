@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Reload systemd to pick up the new service
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+            systemctl enable pve-gpu-sched.service || true
+        fi
+
+        # Load the module if it's already built
+        if modinfo pve_gpu_sched >/dev/null 2>&1; then
+            modprobe pve_gpu_sched || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

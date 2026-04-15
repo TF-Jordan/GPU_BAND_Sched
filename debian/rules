@@ -1,0 +1,46 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+PACKAGE_NAME = pve-gpu-sched
+PACKAGE_VERSION = 0.2.0
+DKMS_SRC = usr/src/$(PACKAGE_NAME)-$(PACKAGE_VERSION)
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+override_dh_auto_build:
+override_dh_auto_test:
+override_dh_auto_install:
+	# Install DKMS source for pve-gpu-sched-dkms package
+	install -d debian/pve-gpu-sched-dkms/$(DKMS_SRC)
+	install -m 644 BAND_Sched/pve_gpu_sched.h \
+		debian/pve-gpu-sched-dkms/$(DKMS_SRC)/
+	install -m 644 BAND_Sched/pve_gpu_sched_core.c \
+		debian/pve-gpu-sched-dkms/$(DKMS_SRC)/
+	install -m 644 BAND_Sched/pve_gpu_sched_band.c \
+		debian/pve-gpu-sched-dkms/$(DKMS_SRC)/
+	install -m 644 BAND_Sched/pve_gpu_sched_mdev.c \
+		debian/pve-gpu-sched-dkms/$(DKMS_SRC)/
+	install -m 644 BAND_Sched/pve_gpu_sched_bar.c \
+		debian/pve-gpu-sched-dkms/$(DKMS_SRC)/
+	install -m 644 BAND_Sched/Makefile \
+		debian/pve-gpu-sched-dkms/$(DKMS_SRC)/
+	install -m 644 BAND_Sched/dkms.conf \
+		debian/pve-gpu-sched-dkms/$(DKMS_SRC)/
+
+	# Install utilities for pve-gpu-sched-utils package
+	install -d debian/pve-gpu-sched-utils/usr/bin
+	install -m 755 scripts/pve-gpu-sched \
+		debian/pve-gpu-sched-utils/usr/bin/
+
+	install -d debian/pve-gpu-sched-utils/etc/modprobe.d
+	install -m 644 conf/pve-gpu-sched.conf \
+		debian/pve-gpu-sched-utils/etc/modprobe.d/
+
+	install -d debian/pve-gpu-sched-utils/lib/systemd/system
+	install -m 644 conf/pve-gpu-sched.service \
+		debian/pve-gpu-sched-utils/lib/systemd/system/
+
+override_dh_auto_clean:

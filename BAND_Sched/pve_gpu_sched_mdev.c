@@ -31,6 +31,11 @@
 
 #include "pve_gpu_sched.h"
 
+MODULE_LICENSE("GPL v2");
+MODULE_AUTHOR("PVE GPU Scheduler Project");
+MODULE_DESCRIPTION("Native GPU time-sharing scheduler for Proxmox VE / KVM");
+MODULE_VERSION("0.2.0");
+
 /* ============================================================
  * CONSTANTES MDEV
  * ============================================================ */
@@ -836,6 +841,13 @@ static int __init pvegpu_mdev_init(void)
 {
     int ret;
 
+    PVEGPU_INFO("loading PVE GPU scheduler v0.2.0\n");
+    PVEGPU_INFO("config: max_domains=%d channels_per_vm=%d period=%d us\n",
+                PVEGPU_MAX_DOMAINS,
+                PVEGPU_DOMAIN_CHANNELS,
+                PVEGPU_SCHED_PERIOD_US);
+    PVEGPU_INFO("features: WFQ scheduling, shadow page tables, "
+                "IRQ forwarding, AMD+NVIDIA\n");
     PVEGPU_INFO("registering mdev driver\n");
 
     ret = mdev_register_driver(&pvegpu_mdev_driver);
@@ -860,6 +872,7 @@ static void __exit pvegpu_mdev_exit(void)
     pci_unregister_driver(&pvegpu_pci_driver);
     mdev_unregister_driver(&pvegpu_mdev_driver);
     PVEGPU_INFO("mdev driver unregistered\n");
+    PVEGPU_INFO("unloading PVE GPU scheduler\n");
 }
 
 module_init(pvegpu_mdev_init);

@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|purge)
+        # Stop the service
+        if [ -d /run/systemd/system ]; then
+            systemctl stop pve-gpu-sched.service || true
+            systemctl disable pve-gpu-sched.service || true
+        fi
+
+        # Unload the module
+        if lsmod | grep -q pve_gpu_sched; then
+            rmmod pve_gpu_sched || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

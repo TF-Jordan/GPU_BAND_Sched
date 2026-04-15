@@ -26,10 +26,10 @@
 
 #include "pve_gpu_sched.h"
 
-MODULE_LICENSE("GPL v2");
-MODULE_AUTHOR("Proxmox GPU Scheduler");
-MODULE_DESCRIPTION("Native GPU time-sharing scheduler for Proxmox VE / KVM");
-MODULE_VERSION("0.2.0");
+/*
+ * Note : MODULE_LICENSE, module_init/exit sont dans pve_gpu_sched_mdev.c
+ * car c'est le fichier qui enregistre les drivers PCI et mdev.
+ */
 
 /* ============================================================
  * SINGLETON DEVICE
@@ -598,26 +598,4 @@ void pvegpu_ctx_destroy(struct pvegpu_vm_ctx *ctx)
     kfree(ctx);
 }
 
-/* ============================================================
- * MODULE INIT / EXIT
- * ============================================================ */
-
-static int __init pvegpu_init(void)
-{
-    PVEGPU_INFO("loading PVE GPU scheduler v0.2.0\n");
-    PVEGPU_INFO("config: max_domains=%d channels_per_vm=%d period=%d us\n",
-                PVEGPU_MAX_DOMAINS,
-                PVEGPU_DOMAIN_CHANNELS,
-                PVEGPU_SCHED_PERIOD_US);
-    PVEGPU_INFO("features: WFQ scheduling, shadow page tables, "
-                "IRQ forwarding, AMD+NVIDIA\n");
-    return 0;
-}
-
-static void __exit pvegpu_exit(void)
-{
-    PVEGPU_INFO("unloading PVE GPU scheduler\n");
-}
-
-module_init(pvegpu_init);
-module_exit(pvegpu_exit);
+/* Module init/exit : voir pve_gpu_sched_mdev.c */
