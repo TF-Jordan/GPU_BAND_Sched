@@ -334,21 +334,109 @@ void pvegpu_write_bar0(struct pvegpu_vm_ctx *ctx, const struct pvegpu_cmd *cmd)
 
             /* Detecter si c'est une ecriture PDE ou PTE
              * dans le page directory du canal.
-             * Les PDEs sont aux offsets 0x200..0x1200 dans le RAMIN
-             * (2048 entries * 8 bytes = 0x4000)
+             *
+             * Layout RAMIN (NVC0) :
+             *   0x000 - 0x1FF : channel header
+             *   0x200 - 0x4200 : Page Directory (2048 PDEs * 8 bytes)
+             *   0x4200+       : Page Tables (si inline)
+             *
+             * Les PDEs et PTEs font 8 bytes (64 bits) mais sont
+             * ecrits en 2 acces de 4 bytes. On utilise un buffer
+             * temporaire par PDE pour accumuler les deux moities.
              */
             uint32_t local_offset = ramin_offset %
                                     PVEGPU_RAMIN_PER_CHANNEL;
+
+            /* --- Interception des ecritures PDE (64-bit) --- */
             if (local_offset >= 0x200 &&
                 local_offset < 0x200 + PVEGPU_PD_ENTRIES * 8) {
-                uint32_t pde_index = (local_offset - 0x200) / 8;
-                /* On recoit les PDEs en 2 ecritures de 4 bytes.
-                 * Pour simplifier, on ne traite que le mot bas
-                 * qui contient l'adresse.
-                 */
-                if ((local_offset - 0x200) % 8 == 0) {
-                    pvegpu_shadow_pd_update_pde(ctx, pde_index,
-                                                (uint64_t)cmd->value);
+                uint32_t pde_byte = local_offset - 0x200;
+                uint32_t pde_index = pde_byte / 8;
+                uint32_t half = pde_byte % 8;  /* 0=low, 4=high */
+
+                if (pde_index < PVEGPU_PD_ENTRIES) {
+                    struct pvegpu_shadow_pd *spd = &ctx->shadow_pd;
+                    unsigned long pd_flags;
+                    uint64_t full_pde;
+
+                    spin_lock_irqsave(&spd->lock, pd_flags);
+
+                    /* Ecrire la moitie dans le shadow PDE */
+                    if (half == 0) {
+                        /* Mot bas : bits [31:0] */
+                        spd->pde[pde_index] =
+                            (spd->pde[pde_index] & 0xFFFFFFFF00000000ULL) |
+                            (uint64_t)cmd->value;
+                    } else {
+                        /* Mot haut : bits [63:32] */
+                        spd->pde[pde_index] =
+                            (spd->pde[pde_index] & 0x00000000FFFFFFFFULL) |
+                            ((uint64_t)cmd->value << 32);
+                    }
+                    full_pde = spd->pde[pde_index];
+
+                    spin_unlock_irqrestore(&spd->lock, pd_flags);
+
+                    /* Quand on recoit le mot haut (2eme ecriture),
+                     * on a le PDE complet — mettre a jour le shadow
+                     */
+                    if (half == 4) {
+                        pvegpu_shadow_pd_update_pde(ctx, pde_index,
+                                                    full_pde);
+                    }
+                }
+            }
+
+            /* --- Interception des ecritures PTE --- */
+            /* Les PTEs sont dans les Page Tables pointees par les PDEs.
+             * Si l'offset est dans la zone PT (apres le PD dans le RAMIN),
+             * on intercepte pour mettre a jour les shadow PTs.
+             *
+             * Zone PT : offset >= 0x4200 dans le RAMIN du canal.
+             * Chaque PT a 8192 entries * 8 bytes = 0x10000.
+             * Le PDE_index est determine par l'adresse de la PT.
+             */
+            {
+                uint32_t pt_base = 0x200 + PVEGPU_PD_ENTRIES * 8;
+
+                if (local_offset >= pt_base) {
+                    uint32_t pt_offset = local_offset - pt_base;
+                    /* Chaque PT = PVEGPU_PT_ENTRIES * 8 bytes */
+                    uint32_t pt_size = PVEGPU_PT_ENTRIES * 8;
+                    uint32_t pde_index = pt_offset / pt_size;
+                    uint32_t pte_byte = pt_offset % pt_size;
+                    uint32_t pte_index = pte_byte / 8;
+                    uint32_t pte_half = pte_byte % 8;
+
+                    if (pde_index < PVEGPU_PD_ENTRIES &&
+                        pte_index < PVEGPU_PT_ENTRIES) {
+                        struct pvegpu_shadow_pd *spd = &ctx->shadow_pd;
+                        struct pvegpu_shadow_pt *pt;
+                        unsigned long pt_flags;
+
+                        spin_lock_irqsave(&spd->lock, pt_flags);
+                        pt = spd->pt[pde_index];
+                        if (pt) {
+                            if (pte_half == 0) {
+                                pt->entries[pte_index] =
+                                    (pt->entries[pte_index] &
+                                     0xFFFFFFFF00000000ULL) |
+                                    (uint64_t)cmd->value;
+                            } else {
+                                pt->entries[pte_index] =
+                                    (pt->entries[pte_index] &
+                                     0x00000000FFFFFFFFULL) |
+                                    ((uint64_t)cmd->value << 32);
+
+                                /* Mot haut recu : PTE complet,
+                                 * mettre a jour le shadow */
+                                pvegpu_shadow_pt_update_pte(
+                                    ctx, pde_index, pte_index,
+                                    pt->entries[pte_index]);
+                            }
+                        }
+                        spin_unlock_irqrestore(&spd->lock, pt_flags);
+                    }
                 }
             }
 

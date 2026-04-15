@@ -1,4 +1,5 @@
 BAND_Sched/pve_gpu_sched.h usr/src/pve-gpu-sched-0.2.0/
+BAND_Sched/pve_gpu_sched_compat.h usr/src/pve-gpu-sched-0.2.0/
 BAND_Sched/pve_gpu_sched_core.c usr/src/pve-gpu-sched-0.2.0/
 BAND_Sched/pve_gpu_sched_band.c usr/src/pve-gpu-sched-0.2.0/
 BAND_Sched/pve_gpu_sched_mdev.c usr/src/pve-gpu-sched-0.2.0/

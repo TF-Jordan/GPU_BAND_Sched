@@ -33,6 +33,8 @@
 #include <linux/mdev.h>
 #include <linux/eventfd.h>
 
+#include "pve_gpu_sched_compat.h"
+
 /* ============================================================
  * CONSTANTES DE CONFIGURATION
  * Equivalent de a3_config.h dans gxen
@@ -178,6 +180,56 @@ struct pvegpu_irq_state {
 };
 
 /* ============================================================
+ * EMULATION CONFIG SPACE PCI (PAR VM)
+ *
+ * Chaque VM a sa propre copie du config space PCI.
+ * Les lectures retournent les valeurs emulees, les ecritures
+ * sont filtrees pour eviter de corrompre le device physique.
+ * ============================================================ */
+
+#define PVEGPU_CFG_SPACE_SIZE   256
+
+struct pvegpu_config_space {
+    uint8_t  regs[PVEGPU_CFG_SPACE_SIZE];   /* shadow config space */
+    bool     initialized;
+};
+
+/* ============================================================
+ * ETAT GPU COMPUTE (SAVE/RESTORE SIMPLIFIE)
+ *
+ * Pour les workloads compute (CUDA/OpenCL), le GPU sauvegarde
+ * et restaure le contexte de calcul automatiquement via RAMIN
+ * quand on change de canal PFIFO.
+ *
+ * Cette structure maintient les registres supplementaires
+ * necessaires au context switch compute :
+ *  - PFIFO_CTX_TABLE : pointe vers le RAMIN du canal actif
+ *  - PGRAPH registers : etat du moteur graphique/compute
+ *  - Compute Class registers : etat specifique CUDA/OpenCL
+ * ============================================================ */
+
+/* Nombre de registres PGRAPH a sauvegarder (NVC0 compute-essentiels) */
+#define PVEGPU_NV_PGRAPH_SAVE_REGS   8
+/* Nombre de registres compute AMD a sauvegarder */
+#define PVEGPU_AMD_COMPUTE_SAVE_REGS 8
+
+struct pvegpu_compute_state {
+    /* NVIDIA NVC0+ : registres PGRAPH/PFIFO necessaires au compute */
+    uint32_t pfifo_ctx_table;        /* PFIFO_CTX_TABLE (0x001700) */
+    uint32_t pgraph_ctxsw_status;    /* PGRAPH context switch status */
+    uint32_t pgraph_regs[PVEGPU_NV_PGRAPH_SAVE_REGS];
+
+    /* AMD GCN+ : registres compute */
+    uint32_t amd_cp_rb_base;         /* CP ring buffer base */
+    uint32_t amd_cp_rb_wptr;         /* CP ring buffer write pointer */
+    uint32_t amd_cp_rb_rptr;         /* CP ring buffer read pointer */
+    uint32_t amd_vm_context_cntl;    /* VM context control */
+    uint32_t amd_compute_regs[PVEGPU_AMD_COMPUTE_SAVE_REGS];
+
+    bool     saved;                  /* etat valide ? */
+};
+
+/* ============================================================
  * CANAL GPU VIRTUALISE
  * Equivalent de a3::channel dans gxen
  * ============================================================ */
@@ -256,6 +308,12 @@ struct pvegpu_vm_ctx {
      */
     struct pvegpu_irq_state irq;
 
+    /* --- Config space PCI emule --- */
+    struct pvegpu_config_space cfg;
+
+    /* --- Etat GPU compute (save/restore) --- */
+    struct pvegpu_compute_state compute;
+
     /* --- BAND Scheduler ---
      * Ces champs ne sont touches que par le scheduler.
      * Proteges par band_lock.
@@ -271,8 +329,9 @@ struct pvegpu_vm_ctx {
     /* File de commandes suspendues (budget epuise).
      * Equivalent de std::queue<command> suspended_ dans a3::context.
      * kfifo est thread-safe pour 1 producteur / 1 consommateur.
+     * Utilise DECLARE_KFIFO_PTR + kfifo_alloc pour allocation dynamique.
      */
-    DECLARE_KFIFO(suspended, struct pvegpu_cmd, PVEGPU_CMD_QUEUE_SIZE);
+    DECLARE_KFIFO_PTR(suspended, struct pvegpu_cmd);
 
     /* --- Liste dans le scheduler ---
      * Equivalent de boost::intrusive::list_base_hook<> dans a3::context.
@@ -373,6 +432,13 @@ struct pvegpu_gpu_ops {
     /* Translation d'adresse RAMIN */
     uint32_t (*ramin_translate)(const struct pvegpu_vm_ctx *ctx,
                                 uint32_t virt_ramin);
+
+    /* Save/restore d'etat compute (CUDA/OpenCL) */
+    void (*compute_save)(struct pvegpu_vm_ctx *ctx);
+    void (*compute_restore)(struct pvegpu_vm_ctx *ctx);
+
+    /* Attente GPU idle */
+    int (*wait_idle)(struct pvegpu_device *gdev, int timeout_us);
 };
 
 /* ============================================================
@@ -420,15 +486,13 @@ struct pvegpu_scheduler {
     ktime_t            previous_bandwidth;
     ktime_t            gpu_idle;         /* temps GPU inactif ce cycle */
     ktime_t            gpu_idle_start;   /* timestamp debut inactivite */
-    uint64_t           counter;          /* nb commandes en attente */
+    atomic64_t         counter;          /* nb commandes en attente (atomique) */
     struct pvegpu_vm_ctx *current_ctx;   /* VM qui a le GPU maintenant */
 
     /* --- Synchronisation ---
      * wq  : la VM en attente dort ici (equivalent de cond_ dans a3)
-     * counter_lock : protege counter + wq
      */
     wait_queue_head_t  wq;
-    spinlock_t         counter_lock;
 
     /* --- TLB flush serialization ---
      * Empeche les flushes TLB concurrents entre VMs.
@@ -566,6 +630,18 @@ int  pvegpu_irq_set(struct pvegpu_vm_ctx *ctx,
                      uint32_t start, uint32_t count,
                      void *data);
 void pvegpu_irq_trigger(struct pvegpu_vm_ctx *ctx);
+
+/* Config space emulation */
+void pvegpu_cfg_init(struct pvegpu_vm_ctx *ctx);
+int  pvegpu_cfg_read(struct pvegpu_vm_ctx *ctx, int offset,
+                      int size, uint32_t *val);
+int  pvegpu_cfg_write(struct pvegpu_vm_ctx *ctx, int offset,
+                       int size, uint32_t val);
+
+/* GPU compute state save/restore */
+void pvegpu_compute_state_save(struct pvegpu_vm_ctx *ctx);
+void pvegpu_compute_state_restore(struct pvegpu_vm_ctx *ctx);
+int  pvegpu_gpu_wait_idle(struct pvegpu_device *gdev, int timeout_us);
 
 /* GPU ops par vendor */
 extern const struct pvegpu_gpu_ops pvegpu_nvidia_nvc0_ops;

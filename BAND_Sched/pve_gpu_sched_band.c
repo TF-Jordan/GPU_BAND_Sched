@@ -321,21 +321,19 @@ static int pvegpu_run_thread(void *data)
 
         sched->gpu_idle_start = ktime_get();
 
+        /* Attendre qu'une commande soit en file (atomic64, plus de cast) */
         wait_event_interruptible(sched->wq,
-            atomic64_read((atomic64_t *)&sched->counter) > 0 ||
+            atomic64_read(&sched->counter) > 0 ||
             kthread_should_stop());
 
         if (kthread_should_stop())
             break;
 
-        spin_lock_irqsave(&sched->counter_lock, flags);
-        if (sched->counter == 0) {
-            spin_unlock_irqrestore(&sched->counter_lock, flags);
+        if (atomic64_read(&sched->counter) == 0) {
             idle = true;
             schedule();
             continue;
         }
-        spin_unlock_irqrestore(&sched->counter_lock, flags);
 
         /* Selectionner la prochaine VM */
         spin_lock_irqsave(&sched->sched_lock, flags);
@@ -349,10 +347,28 @@ static int pvegpu_run_thread(void *data)
             continue;
         }
 
-        /* Context switch : resynchroniser BAR1 et flusher TLB */
-        if (next != prev_ctx && prev_ctx != NULL) {
+        /* Context switch complet pour compute :
+         * 1. Attendre GPU idle
+         * 2. Sauvegarder l'etat compute de la VM sortante
+         * 3. Resynchroniser BAR1 (canaux PFIFO)
+         * 4. Restaurer l'etat compute de la VM entrante
+         * 5. Flusher TLB pour les nouvelles page tables
+         */
+        if (next != prev_ctx) {
+            /* Attendre que le GPU finisse le travail en cours */
+            pvegpu_gpu_wait_idle(sched->dev, 10000);
+
+            /* Sauvegarder l'etat compute de la VM sortante */
+            if (prev_ctx)
+                pvegpu_compute_state_save(prev_ctx);
+
+            /* Resynchroniser les canaux PFIFO */
             pvegpu_shadow_bar1(next);
 
+            /* Restaurer l'etat compute de la VM entrante */
+            pvegpu_compute_state_restore(next);
+
+            /* Flusher TLB */
             if (sched->dev->gpu_ops &&
                 sched->dev->gpu_ops->flush_tlb) {
                 mutex_lock(&sched->tlb_flush_mutex);
@@ -361,10 +377,8 @@ static int pvegpu_run_thread(void *data)
             }
         }
 
-        spin_lock_irqsave(&sched->counter_lock, flags);
-        if (sched->counter > 0)
-            sched->counter--;
-        spin_unlock_irqrestore(&sched->counter_lock, flags);
+        /* Decrementer le compteur de commandes (atomique) */
+        atomic64_dec_if_positive(&sched->counter);
 
         /* Soumettre au GPU */
         spin_lock_irqsave(&sched->fire_lock, flags);
@@ -493,7 +507,6 @@ static int pvegpu_sampler_thread(void *data)
 void pvegpu_enqueue(struct pvegpu_vm_ctx *ctx, const struct pvegpu_cmd *cmd)
 {
     struct pvegpu_scheduler *sched = &ctx->dev->scheduler;
-    unsigned long flags;
     int ret;
 
     ret = kfifo_in(&ctx->suspended, cmd, sizeof(*cmd));
@@ -503,15 +516,12 @@ void pvegpu_enqueue(struct pvegpu_vm_ctx *ctx, const struct pvegpu_cmd *cmd)
         return;
     }
 
-    spin_lock_irqsave(&sched->counter_lock, flags);
-    sched->counter++;
-    spin_unlock_irqrestore(&sched->counter_lock, flags);
-
+    atomic64_inc(&sched->counter);
     wake_up_interruptible(&sched->wq);
 
-    PVEGPU_LOG("enqueue vmid=%d bar=%u offset=0x%x val=0x%x counter=%llu\n",
+    PVEGPU_LOG("enqueue vmid=%d bar=%u offset=0x%x val=0x%x counter=%lld\n",
                ctx->vmid, cmd->bar, cmd->offset, cmd->value,
-               sched->counter);
+               atomic64_read(&sched->counter));
 }
 
 /* ============================================================
@@ -530,7 +540,7 @@ int pvegpu_sched_init(struct pvegpu_scheduler *sched,
     sched->bandwidth        = ktime_set(0, 0);
     sched->previous_bandwidth = ktime_set(0, 0);
     sched->gpu_idle         = ktime_set(0, 0);
-    sched->counter          = 0;
+    atomic64_set(&sched->counter, 0);
     sched->current_ctx      = NULL;
     sched->running          = false;
     sched->total_cmds_processed = 0;
@@ -538,7 +548,6 @@ int pvegpu_sched_init(struct pvegpu_scheduler *sched,
 
     spin_lock_init(&sched->fire_lock);
     spin_lock_init(&sched->sched_lock);
-    spin_lock_init(&sched->counter_lock);
     mutex_init(&sched->tlb_flush_mutex);
     init_waitqueue_head(&sched->wq);
 

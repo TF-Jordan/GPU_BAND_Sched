@@ -155,6 +155,111 @@ static int nvc0_context_reset(struct pvegpu_vm_ctx *ctx)
     return 0;
 }
 
+/* ============================================================
+ * NVIDIA NVC0 COMPUTE STATE SAVE/RESTORE
+ *
+ * Pour les workloads CUDA, le GPU sauvegarde automatiquement le
+ * contexte compute dans le RAMIN du canal actif. Notre role est de :
+ *  1. Sauvegarder les registres PFIFO et PGRAPH necessaires
+ *  2. Attendre que le GPU soit idle
+ *  3. Pointer le PFIFO vers le bon RAMIN au restore
+ *
+ * Registres NVC0 sauvegardes :
+ *  - 0x001700 : PFIFO_CTX_TABLE (adresse RAMIN du canal actif)
+ *  - 0x400700 : PGRAPH_STATUS (lecture seule, idle detection)
+ *  - 0x400100 : PGRAPH_INTR (interruptions PGRAPH)
+ *  - 0x40060c : PGRAPH_CTXCTL_CUR (contexte PGRAPH courant)
+ *  - 0x400824 : PGRAPH_DISPATCH (dispatch state)
+ *  - 0x419860 : GPC_CWD_FS (compute warp dispatch)
+ *  - 0x419a04 : GPC_CWD_BUNDLE_INIT (compute bundle)
+ *  - 0x405844 : TPC_COMPUTE_REG (compute register file)
+ * ============================================================ */
+
+/* Registres PGRAPH compute a sauvegarder (NVC0) */
+static const uint32_t nvc0_pgraph_compute_regs[] = {
+    0x400100,   /* PGRAPH_INTR */
+    0x40060c,   /* PGRAPH_CTXCTL_CUR */
+    0x400824,   /* PGRAPH_DISPATCH */
+    0x419860,   /* GPC_CWD_FS */
+    0x419a04,   /* GPC_CWD_BUNDLE_INIT */
+    0x405844,   /* TPC_COMPUTE_REG */
+    0x40584c,   /* TPC_COMPUTE_REG_2 */
+    0x400708,   /* PGRAPH_VSTATUS (vertex status) */
+};
+
+static void nvc0_compute_save(struct pvegpu_vm_ctx *ctx)
+{
+    struct pvegpu_device *gdev = ctx->dev;
+    unsigned long flags;
+    int i;
+
+    spin_lock_irqsave(&gdev->mutex, flags);
+
+    /* Sauvegarder PFIFO_CTX_TABLE */
+    ctx->compute.pfifo_ctx_table =
+        pvegpu_bar_read32(gdev, 0, 0x001700);
+
+    /* Sauvegarder les registres PGRAPH compute */
+    for (i = 0; i < PVEGPU_NV_PGRAPH_SAVE_REGS &&
+                i < ARRAY_SIZE(nvc0_pgraph_compute_regs); i++) {
+        ctx->compute.pgraph_regs[i] =
+            pvegpu_bar_read32(gdev, 0, nvc0_pgraph_compute_regs[i]);
+    }
+
+    /* Sauvegarder le status du context switch PGRAPH */
+    ctx->compute.pgraph_ctxsw_status =
+        pvegpu_bar_read32(gdev, 0, 0x400604);
+
+    spin_unlock_irqrestore(&gdev->mutex, flags);
+
+    ctx->compute.saved = true;
+
+    PVEGPU_LOG("compute_save: vmid=%d pfifo_ctx=0x%x\n",
+               ctx->vmid, ctx->compute.pfifo_ctx_table);
+}
+
+static void nvc0_compute_restore(struct pvegpu_vm_ctx *ctx)
+{
+    struct pvegpu_device *gdev = ctx->dev;
+    unsigned long flags;
+    uint32_t ramin_phys;
+
+    if (!ctx->compute.saved)
+        return;
+
+    spin_lock_irqsave(&gdev->mutex, flags);
+
+    /* Restaurer PFIFO_CTX_TABLE avec l'adresse RAMIN translatee.
+     * Le RAMIN contient le page directory et le contexte compute
+     * de la VM. Le GPU charge automatiquement le reste.
+     */
+    ramin_phys = ctx->id * PVEGPU_DOMAIN_CHANNELS
+                 * PVEGPU_RAMIN_PER_CHANNEL;
+    pvegpu_bar_write32(gdev, 0, 0x001700,
+                       (ramin_phys >> 12) | 0x80000000);
+
+    spin_unlock_irqrestore(&gdev->mutex, flags);
+
+    PVEGPU_LOG("compute_restore: vmid=%d ramin_phys=0x%x\n",
+               ctx->vmid, ramin_phys);
+}
+
+static int nvc0_wait_idle(struct pvegpu_device *gdev, int timeout_us)
+{
+    int i;
+    uint32_t status;
+
+    for (i = 0; i < timeout_us; i++) {
+        status = pvegpu_bar_read32(gdev, 0, 0x400700);
+        if (status == 0)
+            return 0;
+        udelay(1);
+    }
+
+    PVEGPU_ERR("nvc0_wait_idle: timeout (status=0x%08x)\n", status);
+    return -ETIMEDOUT;
+}
+
 const struct pvegpu_gpu_ops pvegpu_nvidia_nvc0_ops = {
     .name              = "NVIDIA NVC0+",
     .get_channel_range = nvc0_get_channel_range,
@@ -164,6 +269,9 @@ const struct pvegpu_gpu_ops pvegpu_nvidia_nvc0_ops = {
     .flush_tlb         = nvc0_flush_tlb,
     .context_reset     = nvc0_context_reset,
     .ramin_translate   = nvc0_ramin_translate,
+    .compute_save      = nvc0_compute_save,
+    .compute_restore   = nvc0_compute_restore,
+    .wait_idle         = nvc0_wait_idle,
 };
 
 /* ============================================================
@@ -264,6 +372,114 @@ static int amd_context_reset(struct pvegpu_vm_ctx *ctx)
     return 0;
 }
 
+/* ============================================================
+ * AMD GCN COMPUTE STATE SAVE/RESTORE
+ *
+ * AMD utilise des ring buffers (CP_RB) pour les commandes compute.
+ * On sauvegarde/restaure les pointeurs de ring buffer et les
+ * registres de contexte VM pour chaque VM.
+ * ============================================================ */
+
+#define AMD_CP_RB_WPTR          0x8060
+#define AMD_CP_RB_RPTR          0x8064
+#define AMD_COMPUTE_STATIC_THREAD_MGMT_SE0  0x8E20
+#define AMD_COMPUTE_STATIC_THREAD_MGMT_SE1  0x8E24
+#define AMD_COMPUTE_STATIC_THREAD_MGMT_SE2  0x8E28
+#define AMD_COMPUTE_STATIC_THREAD_MGMT_SE3  0x8E2C
+#define AMD_COMPUTE_RESOURCE_LIMITS         0x8E30
+#define AMD_COMPUTE_TMPRING_SIZE            0x8E34
+#define AMD_SPI_COMPUTE_QUEUE_RESET         0x8E44
+#define AMD_SPI_COMPUTE_WF_CTX_SAVE         0x8E48
+
+static const uint32_t amd_compute_regs[] = {
+    AMD_COMPUTE_STATIC_THREAD_MGMT_SE0,
+    AMD_COMPUTE_STATIC_THREAD_MGMT_SE1,
+    AMD_COMPUTE_RESOURCE_LIMITS,
+    AMD_COMPUTE_TMPRING_SIZE,
+    AMD_SPI_COMPUTE_QUEUE_RESET,
+    AMD_SPI_COMPUTE_WF_CTX_SAVE,
+    0x8E00,     /* COMPUTE_DISPATCH_INITIATOR */
+    0x8E10,     /* COMPUTE_NUM_THREAD_X */
+};
+
+static void amd_compute_save(struct pvegpu_vm_ctx *ctx)
+{
+    struct pvegpu_device *gdev = ctx->dev;
+    unsigned long flags;
+    int i;
+
+    spin_lock_irqsave(&gdev->mutex, flags);
+
+    ctx->compute.amd_cp_rb_base =
+        pvegpu_bar_read32(gdev, 0, AMD_CP_RB_BASE);
+    ctx->compute.amd_cp_rb_wptr =
+        pvegpu_bar_read32(gdev, 0, AMD_CP_RB_WPTR);
+    ctx->compute.amd_cp_rb_rptr =
+        pvegpu_bar_read32(gdev, 0, AMD_CP_RB_RPTR);
+    ctx->compute.amd_vm_context_cntl =
+        pvegpu_bar_read32(gdev, 0, AMD_VM_CONTEXT0_CNTL + ctx->id * 4);
+
+    for (i = 0; i < PVEGPU_AMD_COMPUTE_SAVE_REGS &&
+                i < ARRAY_SIZE(amd_compute_regs); i++) {
+        ctx->compute.amd_compute_regs[i] =
+            pvegpu_bar_read32(gdev, 0, amd_compute_regs[i]);
+    }
+
+    spin_unlock_irqrestore(&gdev->mutex, flags);
+
+    ctx->compute.saved = true;
+
+    PVEGPU_LOG("amd_compute_save: vmid=%d rb_base=0x%x\n",
+               ctx->vmid, ctx->compute.amd_cp_rb_base);
+}
+
+static void amd_compute_restore(struct pvegpu_vm_ctx *ctx)
+{
+    struct pvegpu_device *gdev = ctx->dev;
+    unsigned long flags;
+    int i;
+
+    if (!ctx->compute.saved)
+        return;
+
+    spin_lock_irqsave(&gdev->mutex, flags);
+
+    /* Restaurer le contexte VM pour cette VM */
+    pvegpu_bar_write32(gdev, 0,
+                       AMD_VM_CONTEXT0_CNTL + ctx->id * 4,
+                       ctx->compute.amd_vm_context_cntl);
+
+    /* Restaurer les registres compute */
+    for (i = 0; i < PVEGPU_AMD_COMPUTE_SAVE_REGS &&
+                i < ARRAY_SIZE(amd_compute_regs); i++) {
+        pvegpu_bar_write32(gdev, 0, amd_compute_regs[i],
+                           ctx->compute.amd_compute_regs[i]);
+    }
+
+    spin_unlock_irqrestore(&gdev->mutex, flags);
+
+    PVEGPU_LOG("amd_compute_restore: vmid=%d\n", ctx->vmid);
+}
+
+static int amd_wait_idle(struct pvegpu_device *gdev, int timeout_us)
+{
+    int i;
+    uint32_t status;
+
+    for (i = 0; i < timeout_us; i++) {
+        status = pvegpu_bar_read32(gdev, 0, AMD_GRBM_STATUS);
+        /* GRBM_STATUS: bits indiquant l'activite GPU.
+         * Si les engines sont idle, status & activity_mask == 0.
+         */
+        if ((status & 0x80000000) == 0)
+            return 0;
+        udelay(1);
+    }
+
+    PVEGPU_ERR("amd_wait_idle: timeout (status=0x%08x)\n", status);
+    return -ETIMEDOUT;
+}
+
 const struct pvegpu_gpu_ops pvegpu_amd_gcn_ops = {
     .name              = "AMD GCN+",
     .get_channel_range = amd_get_channel_range,
@@ -273,6 +489,9 @@ const struct pvegpu_gpu_ops pvegpu_amd_gcn_ops = {
     .flush_tlb         = amd_flush_tlb,
     .context_reset     = amd_context_reset,
     .ramin_translate   = amd_ramin_translate,
+    .compute_save      = amd_compute_save,
+    .compute_restore   = amd_compute_restore,
+    .wait_idle         = amd_wait_idle,
 };
 
 /* ============================================================
@@ -514,9 +733,7 @@ int pvegpu_ctx_create(struct pvegpu_device *gdev, int vmid,
     spin_lock_init(&ctx->band_lock);
     INIT_LIST_HEAD(&ctx->list);
 
-    ret = kfifo_alloc(&ctx->suspended,
-                      PVEGPU_CMD_QUEUE_SIZE * sizeof(struct pvegpu_cmd),
-                      GFP_KERNEL);
+    ret = kfifo_alloc(&ctx->suspended, PVEGPU_CMD_QUEUE_SIZE, GFP_KERNEL);
     if (ret) {
         PVEGPU_ERR("kfifo_alloc failed for vmid %d\n", vmid);
         goto err_release_slot;
@@ -537,6 +754,9 @@ int pvegpu_ctx_create(struct pvegpu_device *gdev, int vmid,
     ctx->bandwidth_used   = ktime_set(0, 0);
     ctx->sampling_bw_used = ktime_set(0, 0);
     ctx->bar3_window_base = 0;
+    ctx->compute.saved    = false;
+
+    pvegpu_cfg_init(ctx);
 
     ret = pvegpu_shadow_pd_init(ctx);
     if (ret) {
@@ -596,6 +816,163 @@ void pvegpu_ctx_destroy(struct pvegpu_vm_ctx *ctx)
     pvegpu_release_slot(gdev, ctx->id);
     kfifo_free(&ctx->suspended);
     kfree(ctx);
+}
+
+/* ============================================================
+ * GENERIC COMPUTE STATE / GPU WAIT / CONFIG SPACE
+ * ============================================================ */
+
+void pvegpu_compute_state_save(struct pvegpu_vm_ctx *ctx)
+{
+    if (ctx->dev->gpu_ops && ctx->dev->gpu_ops->compute_save)
+        ctx->dev->gpu_ops->compute_save(ctx);
+}
+
+void pvegpu_compute_state_restore(struct pvegpu_vm_ctx *ctx)
+{
+    if (ctx->dev->gpu_ops && ctx->dev->gpu_ops->compute_restore)
+        ctx->dev->gpu_ops->compute_restore(ctx);
+}
+
+int pvegpu_gpu_wait_idle(struct pvegpu_device *gdev, int timeout_us)
+{
+    if (gdev->gpu_ops && gdev->gpu_ops->wait_idle)
+        return gdev->gpu_ops->wait_idle(gdev, timeout_us);
+
+    /* Fallback generique : poll PGRAPH_STATUS (NVIDIA default) */
+    {
+        int i;
+        uint32_t status_reg = (gdev->vendor_id == PVEGPU_VENDOR_NVIDIA)
+                              ? 0x400700 : 0x8010;  /* GRBM_STATUS */
+
+        for (i = 0; i < timeout_us; i++) {
+            if (pvegpu_bar_read32(gdev, 0, status_reg) == 0)
+                return 0;
+            udelay(1);
+        }
+    }
+    return -ETIMEDOUT;
+}
+
+/*
+ * pvegpu_cfg_init — initialise le config space emule pour une VM
+ *
+ * Copie le config space reel du GPU, puis ajuste les valeurs
+ * specifiques a la VM (BAR sizes, subsystem ID, etc.).
+ */
+void pvegpu_cfg_init(struct pvegpu_vm_ctx *ctx)
+{
+    struct pci_dev *pdev = ctx->dev->pdev;
+    int i;
+
+    /* Lire le config space reel en mots de 32 bits */
+    for (i = 0; i < PVEGPU_CFG_SPACE_SIZE; i += 4) {
+        uint32_t val;
+        pci_read_config_dword(pdev, i, &val);
+        memcpy(&ctx->cfg.regs[i], &val, 4);
+    }
+
+    /* Ajuster les BARs pour refleter la VRAM de cette VM */
+    /* BAR0 et BAR1 : garder les tailles physiques */
+    /* BAR3 (VRAM) : ajuster la taille a vram_per_vm */
+    {
+        uint32_t bar3_size_mask = ~((uint32_t)ctx->vram_size - 1);
+        memcpy(&ctx->cfg.regs[0x1C], &bar3_size_mask, 4);
+    }
+
+    /* Masquer les capabilities MSI-X si presentes (simplification) */
+    /* Laisser MSI fonctionnel pour l'IRQ forwarding */
+
+    ctx->cfg.initialized = true;
+
+    PVEGPU_LOG("cfg_init: vmid=%d config space emulated\n", ctx->vmid);
+}
+
+/*
+ * pvegpu_cfg_read — lecture emule du config space PCI
+ */
+int pvegpu_cfg_read(struct pvegpu_vm_ctx *ctx, int offset,
+                     int size, uint32_t *val)
+{
+    if (offset + size > PVEGPU_CFG_SPACE_SIZE)
+        return -EINVAL;
+
+    *val = 0;
+    memcpy(val, &ctx->cfg.regs[offset], size);
+    return 0;
+}
+
+/*
+ * pvegpu_cfg_write — ecriture emule du config space PCI
+ *
+ * Filtre les ecritures dangereuses. Seuls certains registres
+ * sont modifiables par la VM (command, status, latency timer,
+ * interrupt line).
+ */
+int pvegpu_cfg_write(struct pvegpu_vm_ctx *ctx, int offset,
+                      int size, uint32_t val)
+{
+    if (offset + size > PVEGPU_CFG_SPACE_SIZE)
+        return -EINVAL;
+
+    switch (offset) {
+    case PCI_COMMAND:
+        /* Autoriser seulement I/O, Memory, Bus Master */
+        val &= (PCI_COMMAND_IO | PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
+        memcpy(&ctx->cfg.regs[offset], &val, size);
+        break;
+
+    case PCI_INTERRUPT_LINE:
+        /* La VM peut ecrire sa ligne d'interruption */
+        memcpy(&ctx->cfg.regs[offset], &val, size);
+        break;
+
+    case PCI_CACHE_LINE_SIZE:
+    case PCI_LATENCY_TIMER:
+        memcpy(&ctx->cfg.regs[offset], &val, size);
+        break;
+
+    case PCI_BASE_ADDRESS_0:
+    case PCI_BASE_ADDRESS_1:
+    case PCI_BASE_ADDRESS_2:
+    case PCI_BASE_ADDRESS_3:
+    case PCI_BASE_ADDRESS_4:
+    case PCI_BASE_ADDRESS_5:
+        /* BAR probing : la VM ecrit 0xFFFFFFFF pour detecter la taille.
+         * On repond avec le masque qui indique la taille.
+         * On ne modifie pas les BARs reels.
+         */
+        if (val == 0xFFFFFFFF) {
+            int bar_idx = (offset - PCI_BASE_ADDRESS_0) / 4;
+            resource_size_t bar_size;
+
+            if (bar_idx == 3) {
+                /* BAR3 = VRAM de cette VM */
+                bar_size = ctx->vram_size;
+            } else {
+                bar_size = ctx->dev->bar_size[bar_idx];
+            }
+
+            if (bar_size > 0) {
+                uint32_t mask = ~((uint32_t)bar_size - 1);
+                /* Conserver les bits de type (I/O, mem, 64bit, prefetch) */
+                mask |= (ctx->cfg.regs[offset] & 0x0F);
+                memcpy(&ctx->cfg.regs[offset], &mask, 4);
+            }
+        } else {
+            /* Ecriture d'adresse : stocker dans le shadow config */
+            memcpy(&ctx->cfg.regs[offset], &val, size);
+        }
+        break;
+
+    default:
+        /* Bloquer les ecritures aux registres critiques */
+        PVEGPU_LOG("cfg_write: blocked vmid=%d offset=0x%x val=0x%x\n",
+                   ctx->vmid, offset, val);
+        break;
+    }
+
+    return 0;
 }
 
 /* Module init/exit : voir pve_gpu_sched_mdev.c */

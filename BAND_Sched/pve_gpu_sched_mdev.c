@@ -170,7 +170,7 @@ int pvegpu_irq_set(struct pvegpu_vm_ctx *ctx,
         } else if (data_type == VFIO_IRQ_SET_DATA_NONE) {
             /* Trigger manuel */
             if (ctx->irq.trigger && ctx->irq.enabled) {
-                eventfd_signal(ctx->irq.trigger);
+                pvegpu_eventfd_signal(ctx->irq.trigger);
                 PVEGPU_LOG("irq_set: manual trigger vmid=%d\n",
                            ctx->vmid);
             }
@@ -213,16 +213,31 @@ void pvegpu_irq_trigger(struct pvegpu_vm_ctx *ctx)
  * via eventfd. Sur NVIDIA, on lit PFIFO_INTR_0 et PGRAPH_INTR
  * pour identifier la source.
  */
+/*
+ * pvegpu_gpu_irq_handler — handler d'interruption GPU ameliore
+ *
+ * Forwarde l'interruption a la VM courante ET notifie les VMs
+ * en attente si elles ont des commandes en cours. Cela permet
+ * un meilleur support multi-VM pour les workloads compute.
+ *
+ * Sur NVIDIA : analyse PFIFO_INTR et PGRAPH_INTR pour identifier
+ * la source. Sur AMD : analyse GRBM interrupt status.
+ */
 static irqreturn_t pvegpu_gpu_irq_handler(int irq, void *data)
 {
     struct pvegpu_device *gdev = data;
     struct pvegpu_vm_ctx *ctx;
     uint32_t intr_status;
+    uint32_t pfifo_intr = 0;
     unsigned long flags;
+    int i;
 
     /* Lire le registre d'interruption global */
     if (gdev->vendor_id == PVEGPU_VENDOR_NVIDIA) {
         intr_status = pvegpu_bar_read32(gdev, 0, 0x000100);
+        /* Lire aussi PFIFO_INTR pour determiner le canal source */
+        if (intr_status & 0x00000100)  /* bit 8 = PFIFO */
+            pfifo_intr = pvegpu_bar_read32(gdev, 0, 0x002100);
     } else {
         intr_status = pvegpu_bar_read32(gdev, 0, 0x44);
     }
@@ -230,7 +245,7 @@ static irqreturn_t pvegpu_gpu_irq_handler(int irq, void *data)
     if (intr_status == 0)
         return IRQ_NONE;
 
-    /* Forwarder a la VM courante du scheduler */
+    /* Forwarder a la VM courante (prioritaire) */
     spin_lock_irqsave(&gdev->scheduler.sched_lock, flags);
     ctx = gdev->scheduler.current_ctx;
     spin_unlock_irqrestore(&gdev->scheduler.sched_lock, flags);
@@ -238,9 +253,27 @@ static irqreturn_t pvegpu_gpu_irq_handler(int irq, void *data)
     if (ctx)
         pvegpu_irq_trigger(ctx);
 
+    /* Pour les interruptions PFIFO, notifier aussi les VMs
+     * qui ont des canaux actifs correspondants. Cela permet
+     * aux VMs en attente de completion de recevoir leur signal.
+     */
+    if (pfifo_intr) {
+        for (i = 0; i < PVEGPU_MAX_DOMAINS; i++) {
+            struct pvegpu_vm_ctx *vm = gdev->contexts[i];
+            if (!vm || vm == ctx || !vm->initialized)
+                continue;
+            if (vm->irq.enabled && vm->irq.trigger &&
+                pvegpu_ctx_is_suspended(vm)) {
+                pvegpu_irq_trigger(vm);
+            }
+        }
+    }
+
     /* Acquitter l'interruption */
     if (gdev->vendor_id == PVEGPU_VENDOR_NVIDIA) {
         pvegpu_bar_write32(gdev, 0, 0x000100, intr_status);
+        if (pfifo_intr)
+            pvegpu_bar_write32(gdev, 0, 0x002100, pfifo_intr);
     } else {
         pvegpu_bar_write32(gdev, 0, 0x44, intr_status);
     }
@@ -320,12 +353,12 @@ static ssize_t pvegpu_mdev_read(struct vfio_device *vdev,
     bar = VFIO_PCI_OFFSET_TO_INDEX(*ppos);
 
     if (bar != 0 && bar != 1 && bar != 3) {
-        /* Pour le config space, lire directement depuis PCI */
+        /* Config space : utiliser l'emulation per-VM */
         if (bar == VFIO_PCI_CONFIG_REGION_INDEX) {
             uint32_t val = 0;
-            if (pos + count > PCI_CFG_SPACE_SIZE)
+            if (pos + count > PVEGPU_CFG_SPACE_SIZE)
                 return -EINVAL;
-            pci_read_config_dword(ctx->dev->pdev, (int)pos, &val);
+            pvegpu_cfg_read(ctx, (int)pos, (int)count, &val);
             if (copy_to_user(buf, &val, count))
                 return -EFAULT;
             return count;
@@ -378,12 +411,13 @@ static ssize_t pvegpu_mdev_write(struct vfio_device *vdev,
     bar = VFIO_PCI_OFFSET_TO_INDEX(*ppos);
 
     if (bar != 0 && bar != 1 && bar != 3) {
+        /* Config space : utiliser l'emulation per-VM */
         if (bar == VFIO_PCI_CONFIG_REGION_INDEX) {
-            if (pos + count > PCI_CFG_SPACE_SIZE)
+            if (pos + count > PVEGPU_CFG_SPACE_SIZE)
                 return -EINVAL;
             if (copy_from_user(&val, buf, count))
                 return -EFAULT;
-            pci_write_config_dword(ctx->dev->pdev, (int)pos, val);
+            pvegpu_cfg_write(ctx, (int)pos, (int)count, val);
             return count;
         }
         PVEGPU_ERR("write: unsupported BAR %u\n", bar);
@@ -466,7 +500,7 @@ static long pvegpu_mdev_ioctl(struct vfio_device *vdev,
             break;
 
         case VFIO_PCI_CONFIG_REGION_INDEX:
-            info.size  = PCI_CFG_SPACE_SIZE;
+            info.size  = PVEGPU_CFG_SPACE_SIZE;
             info.flags = VFIO_REGION_INFO_FLAG_READ |
                          VFIO_REGION_INFO_FLAG_WRITE;
             info.offset = VFIO_PCI_INDEX_TO_OFFSET(VFIO_PCI_CONFIG_REGION_INDEX);
@@ -662,9 +696,9 @@ static int pvegpu_mdev_probe(struct mdev_device *mdev)
 
     vfio_init_group_dev(&ctx->vdev, mdev_dev(mdev), &pvegpu_vfio_ops);
 
-    ret = vfio_register_group_dev(&ctx->vdev);
+    ret = pvegpu_vfio_register_dev(&ctx->vdev);
     if (ret) {
-        PVEGPU_ERR("probe: vfio_register_group_dev failed: %d\n", ret);
+        PVEGPU_ERR("probe: vfio register dev failed: %d\n", ret);
         pvegpu_ctx_destroy(ctx);
         return ret;
     }
@@ -688,7 +722,7 @@ static void pvegpu_mdev_remove(struct mdev_device *mdev)
     PVEGPU_INFO("remove: vmid=%d slot=%u\n", ctx->vmid, ctx->id);
 
     vfio_unregister_group_dev(&ctx->vdev);
-    vfio_uninit_group_dev(&ctx->vdev);
+    pvegpu_vfio_cleanup_dev(&ctx->vdev);
     pvegpu_ctx_destroy(ctx);
     dev_set_drvdata(mdev_dev(mdev), NULL);
 }
@@ -789,8 +823,8 @@ static int pvegpu_pci_probe(struct pci_dev *pdev,
                     pdev->irq);
     }
 
-    ret = mdev_register_parent(&gdev->mdev_parent, &pdev->dev,
-                                &pvegpu_mdev_driver);
+    ret = PVEGPU_MDEV_REGISTER_PARENT(&gdev->mdev_parent, &pdev->dev,
+                                       &pvegpu_mdev_driver, NULL, 0);
     if (ret) {
         PVEGPU_ERR("pci_probe: mdev_register_parent failed: %d\n", ret);
         if (gdev->irq_registered)
