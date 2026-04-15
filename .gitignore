@@ -1,0 +1,27 @@
+# Build artifacts
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+modules.order
+Module.symvers
+.tmp_versions/
+
+# Debian build artifacts
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
+debian/*.debhelper
+debian/pve-gpu-sched-dkms/
+debian/pve-gpu-sched-utils/
+debian/tmp/
+
+# IDE
+.idea/
+
+# Generated .deb packages
+*.deb
+*.buildinfo
+*.changes
