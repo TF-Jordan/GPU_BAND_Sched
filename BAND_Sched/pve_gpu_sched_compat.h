@@ -73,44 +73,29 @@
 #endif
 
 /* ============================================================
- * VFIO DEVICE INITIALIZATION
+ * VFIO DEVICE LIFECYCLE
  *
- * Kernel 5.15-6.7  : vfio_init_group_dev() + vfio_register_group_dev()
- * Kernel 6.8+      : vfio_init_group_dev() removed.
- *                     Use vfio_alloc_device() or manual init.
+ * Kernel < 6.8 :
+ *   kzalloc(ctx)
+ *   vfio_init_group_dev(&ctx->vdev, dev, ops)
+ *   vfio_register_group_dev() ou vfio_register_emulated_iommu_dev()
+ *   ...
+ *   vfio_unregister_group_dev()
+ *   vfio_uninit_group_dev() (< 6.1) ou vfio_put_device() (>= 6.1)
+ *   kfree(ctx)
  *
- * Pour notre cas mdev, on utilise simplement
- * vfio_register_emulated_iommu_dev() (6.1+) qui gere aussi l'init.
- * On fournit un wrapper no-op pour vfio_init_group_dev sur 6.8+.
- * ============================================================ */
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
-  /* vfio_init_group_dev() n'existe plus. Le device est initialise
-   * directement par vfio_register_emulated_iommu_dev().
-   * On fournit un no-op inline pour eviter de changer tout le code.
-   */
-  static inline void pvegpu_vfio_init_dev(struct vfio_device *vdev,
-                                           struct device *dev,
-                                           const struct vfio_device_ops *ops)
-  {
-      /* Le vfio_device doit etre initialise manuellement */
-      vdev->dev = dev;
-      vdev->ops = ops;
-  }
-#else
-  static inline void pvegpu_vfio_init_dev(struct vfio_device *vdev,
-                                           struct device *dev,
-                                           const struct vfio_device_ops *ops)
-  {
-      vfio_init_group_dev(vdev, dev, ops);
-  }
-#endif
-
-/* ============================================================
- * VFIO DEVICE REGISTRATION
+ * Kernel 6.8+ :
+ *   vfio_alloc_device(type, member, dev, ops)
+ *     → kvzalloc + vfio_init_device (device_initialize, etc.)
+ *   vfio_register_emulated_iommu_dev()
+ *   ...
+ *   vfio_unregister_group_dev()
+ *   vfio_put_device()
+ *     → .release callback + kvfree
  *
- * Kernel 5.15 : vfio_register_group_dev()
- * Kernel 6.1+ : vfio_register_emulated_iommu_dev() pour mdev
+ * Les #ifdefs d'allocation/cleanup sont directement dans
+ * pvegpu_mdev_probe() et pvegpu_mdev_remove(). Ici on fournit
+ * seulement le wrapper pour la registration.
  * ============================================================ */
 
 static inline int pvegpu_vfio_register_dev(struct vfio_device *vdev)
@@ -119,23 +104,6 @@ static inline int pvegpu_vfio_register_dev(struct vfio_device *vdev)
     return vfio_register_emulated_iommu_dev(vdev);
 #else
     return vfio_register_group_dev(vdev);
-#endif
-}
-
-/* ============================================================
- * VFIO DEVICE CLEANUP
- *
- * Kernel 5.15 : vfio_uninit_group_dev()
- * Kernel 6.1+ : vfio_put_device() ou simplement rien
- *               (le cleanup se fait via release callback)
- * ============================================================ */
-
-static inline void pvegpu_vfio_cleanup_dev(struct vfio_device *vdev)
-{
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
-    vfio_put_device(vdev);
-#else
-    vfio_uninit_group_dev(vdev);
 #endif
 }
 

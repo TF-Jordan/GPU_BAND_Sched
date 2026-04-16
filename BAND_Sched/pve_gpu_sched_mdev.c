@@ -641,8 +641,26 @@ static int pvegpu_mdev_mmap(struct vfio_device *vdev,
     return 0;
 }
 
+/*
+ * Kernel 6.8+ : vfio_alloc_device() requiert un callback .release
+ * dans vfio_device_ops. Ce callback est appele par le VFIO core
+ * quand la derniere reference au device est relachee (vfio_put_device).
+ * La memoire est liberee par kvfree() dans le VFIO core APRES .release.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+static void pvegpu_vfio_dev_release(struct vfio_device *vdev)
+{
+    /* pvegpu_ctx_destroy() est deja appele dans pvegpu_mdev_remove().
+     * Le VFIO core fait kvfree() apres ce callback.
+     */
+}
+#endif
+
 static const struct vfio_device_ops pvegpu_vfio_ops = {
     .name         = "pvegpu-sched",
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+    .release      = pvegpu_vfio_dev_release,
+#endif
     .open_device  = pvegpu_mdev_open_device,
     .close_device = pvegpu_mdev_close_device,
     .read         = pvegpu_mdev_read,
@@ -653,6 +671,20 @@ static const struct vfio_device_ops pvegpu_vfio_ops = {
 
 /* ============================================================
  * MDEV DRIVER OPS
+ *
+ * Lifecycle VFIO par version kernel :
+ *
+ *  Kernel < 6.8 :
+ *    kzalloc(ctx) → vfio_init_group_dev() → vfio_register_*_dev()
+ *    vfio_unregister_group_dev() → vfio_uninit_group_dev() → kfree()
+ *
+ *  Kernel 6.8+ :
+ *    vfio_alloc_device() → pvegpu_ctx_init() → vfio_register_*_dev()
+ *    vfio_unregister_group_dev() → vfio_put_device() → kvfree()
+ *
+ * vfio_alloc_device() appelle _vfio_alloc_device() qui fait :
+ *   kvzalloc + vfio_init_device (init_completion, device_initialize, etc.)
+ * C'est obligatoire sur 6.8+ car vfio_init_group_dev() n'existe plus.
  * ============================================================ */
 
 static int pvegpu_mdev_probe(struct mdev_device *mdev)
@@ -686,20 +718,48 @@ static int pvegpu_mdev_probe(struct mdev_device *mdev)
                 "weight=%u\n",
                 vmid, uuid_str ? uuid_str : "unknown", weight);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+    /* Kernel 6.8+ : vfio_alloc_device() alloue le pvegpu_vm_ctx
+     * et initialise le vfio_device interne (device_initialize,
+     * init_completion, etc.). Sans ca, vfio_register_emulated_iommu_dev
+     * retourne -EINVAL.
+     */
+    ctx = vfio_alloc_device(pvegpu_vm_ctx, vdev,
+                            mdev_dev(mdev), &pvegpu_vfio_ops);
+    if (IS_ERR(ctx)) {
+        PVEGPU_ERR("probe: vfio_alloc_device failed: %ld\n",
+                   PTR_ERR(ctx));
+        return PTR_ERR(ctx);
+    }
+
+    ret = pvegpu_ctx_init(ctx, gdev, vmid, weight);
+    if (ret) {
+        PVEGPU_ERR("probe: pvegpu_ctx_init failed: %d\n", ret);
+        vfio_put_device(&ctx->vdev);
+        return ret;
+    }
+#else
+    /* Kernel < 6.8 : kzalloc + vfio_init_group_dev classique */
     ret = pvegpu_ctx_create(gdev, vmid, weight, &ctx);
     if (ret) {
         PVEGPU_ERR("probe: pvegpu_ctx_create failed: %d\n", ret);
         return ret;
     }
 
-    ctx->mdev = mdev;
+    vfio_init_group_dev(&ctx->vdev, mdev_dev(mdev), &pvegpu_vfio_ops);
+#endif
 
-    pvegpu_vfio_init_dev(&ctx->vdev, mdev_dev(mdev), &pvegpu_vfio_ops);
+    ctx->mdev = mdev;
 
     ret = pvegpu_vfio_register_dev(&ctx->vdev);
     if (ret) {
         PVEGPU_ERR("probe: vfio register dev failed: %d\n", ret);
         pvegpu_ctx_destroy(ctx);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+        vfio_put_device(&ctx->vdev);
+#else
+        kfree(ctx);
+#endif
         return ret;
     }
 
@@ -722,8 +782,18 @@ static void pvegpu_mdev_remove(struct mdev_device *mdev)
     PVEGPU_INFO("remove: vmid=%d slot=%u\n", ctx->vmid, ctx->id);
 
     vfio_unregister_group_dev(&ctx->vdev);
-    pvegpu_vfio_cleanup_dev(&ctx->vdev);
     pvegpu_ctx_destroy(ctx);
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+    /* vfio_put_device relache la reference. Le VFIO core appelle
+     * .release puis kvfree(ctx) quand le refcount atteint 0.
+     */
+    vfio_put_device(&ctx->vdev);
+#else
+    vfio_uninit_group_dev(&ctx->vdev);
+    kfree(ctx);
+#endif
+
     dev_set_drvdata(mdev_dev(mdev), NULL);
 }
 
