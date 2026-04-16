@@ -661,6 +661,20 @@ static const struct vfio_device_ops pvegpu_vfio_ops = {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
     .release      = pvegpu_vfio_dev_release,
 #endif
+    /*
+     * Kernel 6.2+ : callbacks iommufd pour les devices mdev.
+     * vfio_iommufd_emulated_* sont des helpers kernel pour les devices
+     * a IOMMU emule (exactement notre cas : mdev sans vrai IOMMU).
+     * Sans ces callbacks, vfio_register_emulated_iommu_dev() peut
+     * retourner -EINVAL sur les kernels avec iommufd actif.
+     * C'est le meme pattern que le driver Intel GVT (i915/gvt/kvmgt.c).
+     */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
+    .bind_iommufd_device   = vfio_iommufd_emulated_bind,
+    .unbind_iommufd_device = vfio_iommufd_emulated_unbind,
+    .attach_ioas           = vfio_iommufd_emulated_attach_ioas,
+    .detach_ioas           = vfio_iommufd_emulated_detach_ioas,
+#endif
     .open_device  = pvegpu_mdev_open_device,
     .close_device = pvegpu_mdev_close_device,
     .read         = pvegpu_mdev_read,
