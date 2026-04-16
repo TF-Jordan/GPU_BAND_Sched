@@ -8,7 +8,7 @@ Homepage: https://github.com/tf-jordan/gpu_band_sched
 
 Package: pve-gpu-sched-dkms
 Architecture: all
-Depends: ${misc:Depends}, dkms, linux-headers-amd64 | linux-headers-generic
+Depends: ${misc:Depends}, dkms, pve-headers | proxmox-default-headers | linux-headers-amd64
 Recommends: proxmox-ve
 Description: GPU time-sharing scheduler for Proxmox VE / KVM (DKMS)
  Module kernel mdev (VFIO mediated device) qui intercepte les acces

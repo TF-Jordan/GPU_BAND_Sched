@@ -268,44 +268,30 @@ struct pvegpu_channel {
  * Detruit quand la VM s'arrete.
  */
 struct pvegpu_vm_ctx {
+    /* --- Interface VFIO ---
+     * DOIT etre le premier membre pour vfio_alloc_device() (kernel 6.8+)
+     * qui exige offsetof(container, vdev) == 0.
+     */
+    struct vfio_device   vdev;
+
     /* --- Identite --- */
     uint32_t id;        /* slot GPU : 0..PVEGPU_MAX_DOMAINS-1 */
     int      vmid;      /* VMID Proxmox (= domid dans a3) */
     bool     initialized;
 
-    /* --- Poids WFQ ---
-     * Determine la proportion de temps GPU allouee a cette VM.
-     * Configure via gpu-weight dans la config Proxmox.
-     * 1-100, defaut 50.
-     */
+    /* --- Poids WFQ --- */
     uint32_t weight;
 
-    /* --- Translation d'adresse VRAM ---
-     * Chaque VM a une tranche de VRAM :
-     *   VM 0 : [0,          vram_size)
-     *   VM 1 : [vram_size,  2*vram_size)
-     *   VM N : [N*vram_size, (N+1)*vram_size)
-     *
-     * get_phys_address(virt) = virt + id * vram_size
-     * Equivalent de a3::context::get_phys_address()
-     */
-    uint64_t vram_size;     /* taille VRAM allouee a cette VM */
+    /* --- Translation d'adresse VRAM --- */
+    uint64_t vram_size;
 
-    /* --- Canaux GPU shadow ---
-     * Equivalent de a3::context::channels_[]
-     */
+    /* --- Canaux GPU shadow --- */
     struct pvegpu_channel channels[PVEGPU_DOMAIN_CHANNELS];
 
-    /* --- Shadow page tables ---
-     * Maintient une copie des page tables GPU de la VM
-     * avec les adresses translatees.
-     * Equivalent de shadow_page_table dans a3.
-     */
+    /* --- Shadow page tables --- */
     struct pvegpu_shadow_pd shadow_pd;
 
-    /* --- Etat IRQ ---
-     * Forwarding des interruptions GPU vers QEMU via eventfd.
-     */
+    /* --- Etat IRQ --- */
     struct pvegpu_irq_state irq;
 
     /* --- Config space PCI emule --- */
@@ -314,44 +300,25 @@ struct pvegpu_vm_ctx {
     /* --- Etat GPU compute (save/restore) --- */
     struct pvegpu_compute_state compute;
 
-    /* --- BAND Scheduler ---
-     * Ces champs ne sont touches que par le scheduler.
-     * Proteges par band_lock.
-     * Equivalent des champs "// only touched by BAND scheduler"
-     * dans a3::context.
-     */
+    /* --- BAND Scheduler --- */
     spinlock_t  band_lock;
-    ktime_t     budget;              /* budget restant dans la periode */
-    ktime_t     bandwidth;           /* quota total alloue (WFQ weight) */
-    ktime_t     bandwidth_used;      /* consomme dans la periode courante */
-    ktime_t     sampling_bw_used;    /* consomme mesure par le sampler */
+    ktime_t     budget;
+    ktime_t     bandwidth;
+    ktime_t     bandwidth_used;
+    ktime_t     sampling_bw_used;
 
-    /* File de commandes suspendues (budget epuise).
-     * Equivalent de std::queue<command> suspended_ dans a3::context.
-     * kfifo est thread-safe pour 1 producteur / 1 consommateur.
-     * Utilise DECLARE_KFIFO_PTR + kfifo_alloc pour allocation dynamique.
-     */
     DECLARE_KFIFO_PTR(suspended, struct pvegpu_cmd);
 
-    /* --- Liste dans le scheduler ---
-     * Equivalent de boost::intrusive::list_base_hook<> dans a3::context.
-     * Permet d'inserer ce contexte dans scheduler->contexts sans alloc.
-     */
+    /* --- Liste dans le scheduler --- */
     struct list_head list;
 
     /* --- Reference au device parent --- */
     struct pvegpu_device *dev;
 
-    /* --- Interface mdev (VFIO) ---
-     * Un mdev_device est cree par VM dans /sys/bus/mdev/devices/
-     */
+    /* --- Interface mdev --- */
     struct mdev_device  *mdev;
-    struct vfio_device   vdev;
 
-    /* --- BAR3 fenetre glissante ---
-     * Pour VRAM > 4GB, on utilise une fenetre glissante dans BAR3.
-     * window_base = offset actuel de la fenetre dans la VRAM physique.
-     */
+    /* --- BAR3 fenetre glissante --- */
     uint64_t bar3_window_base;
 };
 
@@ -581,6 +548,9 @@ void pvegpu_device_fini(struct pvegpu_device *gdev);
 int  pvegpu_ctx_create(struct pvegpu_device *gdev, int vmid,
                        uint32_t weight,
                        struct pvegpu_vm_ctx **ctx_out);
+int  pvegpu_ctx_init(struct pvegpu_vm_ctx *ctx,
+                     struct pvegpu_device *gdev, int vmid,
+                     uint32_t weight);
 void pvegpu_ctx_destroy(struct pvegpu_vm_ctx *ctx);
 
 /* Scheduler */

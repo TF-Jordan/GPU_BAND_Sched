@@ -624,7 +624,7 @@ static int pvegpu_mdev_mmap(struct vfio_device *vdev,
     phys_base = bar3_phys + pvegpu_ctx_addr_shift(ctx);
 
     vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
-    vma->vm_flags |= VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
+    pvegpu_vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
 
     if (remap_pfn_range(vma,
                         vma->vm_start,
@@ -694,7 +694,7 @@ static int pvegpu_mdev_probe(struct mdev_device *mdev)
 
     ctx->mdev = mdev;
 
-    vfio_init_group_dev(&ctx->vdev, mdev_dev(mdev), &pvegpu_vfio_ops);
+    pvegpu_vfio_init_dev(&ctx->vdev, mdev_dev(mdev), &pvegpu_vfio_ops);
 
     ret = pvegpu_vfio_register_dev(&ctx->vdev);
     if (ret) {
@@ -784,6 +784,27 @@ static struct mdev_driver pvegpu_mdev_driver = {
 };
 
 /* ============================================================
+ * MDEV TYPE DEFINITION
+ *
+ * Definit le type mdev "pvegpu-sched" expose dans sysfs :
+ *   /sys/bus/pci/devices/<GPU>/mdev_supported_types/pvegpu-sched/
+ *
+ * Kernel 6.6+ : mdev_register_parent attend struct mdev_type **
+ * Le mdev core initialise le kobject et cree les entrees sysfs.
+ * Les callbacks get_available/show_description du mdev_driver
+ * fournissent les infos pour available_instances et description.
+ * ============================================================ */
+
+static struct mdev_type pvegpu_mdev_type_obj = {
+    .sysfs_name  = PVEGPU_MDEV_TYPE_NAME,
+    .pretty_name = PVEGPU_MDEV_DESCRIPTION,
+};
+
+static struct mdev_type *pvegpu_mdev_types[] = {
+    &pvegpu_mdev_type_obj,
+};
+
+/* ============================================================
  * PCI DRIVER
  * ============================================================ */
 
@@ -824,7 +845,9 @@ static int pvegpu_pci_probe(struct pci_dev *pdev,
     }
 
     ret = PVEGPU_MDEV_REGISTER_PARENT(&gdev->mdev_parent, &pdev->dev,
-                                       &pvegpu_mdev_driver, NULL, 0);
+                                       &pvegpu_mdev_driver,
+                                       pvegpu_mdev_types,
+                                       ARRAY_SIZE(pvegpu_mdev_types));
     if (ret) {
         PVEGPU_ERR("pci_probe: mdev_register_parent failed: %d\n", ret);
         if (gdev->irq_registered)

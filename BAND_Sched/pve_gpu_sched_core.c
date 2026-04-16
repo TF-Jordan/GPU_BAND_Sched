@@ -699,27 +699,27 @@ static void pvegpu_release_slot(struct pvegpu_device *gdev, int slot)
 }
 
 /* ============================================================
- * CONTEXT CREATE / DESTROY
+ * CONTEXT INIT / CREATE / DESTROY
  * ============================================================ */
 
-int pvegpu_ctx_create(struct pvegpu_device *gdev, int vmid,
-                       uint32_t weight,
-                       struct pvegpu_vm_ctx **ctx_out)
+/*
+ * pvegpu_ctx_init — initialise un pvegpu_vm_ctx deja alloue.
+ *
+ * Utilise par pvegpu_mdev_probe() avec vfio_alloc_device() sur kernel 6.8+,
+ * ou par pvegpu_ctx_create() (kzalloc) sur kernels plus anciens.
+ */
+int pvegpu_ctx_init(struct pvegpu_vm_ctx *ctx,
+                    struct pvegpu_device *gdev, int vmid,
+                    uint32_t weight)
 {
-    struct pvegpu_vm_ctx *ctx;
     int slot;
     int ret;
     uint32_t i;
 
-    ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
-    if (!ctx)
-        return -ENOMEM;
-
     slot = pvegpu_acquire_slot(gdev);
     if (slot < 0) {
         PVEGPU_ERR("no GPU slot available for vmid %d\n", vmid);
-        ret = slot;
-        goto err_free;
+        return slot;
     }
 
     ctx->id             = (uint32_t)slot;
@@ -780,7 +780,6 @@ int pvegpu_ctx_create(struct pvegpu_device *gdev, int vmid,
                 vmid, slot, ctx->weight,
                 (unsigned long long)(pvegpu_ctx_addr_shift(ctx) >> 20));
 
-    *ctx_out = ctx;
     return 0;
 
 err_shadow:
@@ -789,11 +788,40 @@ err_kfifo:
     kfifo_free(&ctx->suspended);
 err_release_slot:
     pvegpu_release_slot(gdev, slot);
-err_free:
-    kfree(ctx);
     return ret;
 }
 
+/*
+ * pvegpu_ctx_create — alloue et initialise un contexte (kernel < 6.8)
+ */
+int pvegpu_ctx_create(struct pvegpu_device *gdev, int vmid,
+                       uint32_t weight,
+                       struct pvegpu_vm_ctx **ctx_out)
+{
+    struct pvegpu_vm_ctx *ctx;
+    int ret;
+
+    ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+    if (!ctx)
+        return -ENOMEM;
+
+    ret = pvegpu_ctx_init(ctx, gdev, vmid, weight);
+    if (ret) {
+        kfree(ctx);
+        return ret;
+    }
+
+    *ctx_out = ctx;
+    return 0;
+}
+
+/*
+ * pvegpu_ctx_destroy — libere les ressources d'un contexte.
+ *
+ * Ne fait PAS kfree(ctx). L'appelant gere la memoire :
+ *  - kernel < 6.8 : kfree() apres ctx_destroy
+ *  - kernel 6.8+  : vfio_put_device() (kvfree via release callback)
+ */
 void pvegpu_ctx_destroy(struct pvegpu_vm_ctx *ctx)
 {
     struct pvegpu_device *gdev;
@@ -815,7 +843,6 @@ void pvegpu_ctx_destroy(struct pvegpu_vm_ctx *ctx)
 
     pvegpu_release_slot(gdev, ctx->id);
     kfifo_free(&ctx->suspended);
-    kfree(ctx);
 }
 
 /* ============================================================
