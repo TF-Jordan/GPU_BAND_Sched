@@ -273,13 +273,19 @@ def cmd_create(args):
     print(f"  GPU    : [{parent['bdf']}] {parent['vendor_name']}")
     print(f"  Type   : {type_dirs[0]}")
 
+    sysfs_path = f"/sys/bus/mdev/devices/{mdev_uuid}"
+
     try:
         with open(create_path, "w") as f:
             f.write(mdev_uuid)
         print(f"  Status : OK")
         print()
-        print(f"Pour attacher a la VM (qm set) :")
-        print(f"  qm set {vmid} -hostpci0 {parent['bdf']},mdev={mdev_uuid}")
+        print(f"Pour attacher a la VM, ajoutez ces args QEMU (une seule fois) :")
+        print(f"  qm set {vmid} -args \"-device vfio-pci,sysfsdev={sysfs_path}\"")
+        print()
+        print(f"Note: recrez l'instance apres chaque redemarrage du serveur :")
+        print(f"  pve-gpu-sched create {vmid}   # avant qm start {vmid}")
+        print(f"  pve-gpu-sched destroy {vmid}  # apres qm stop {vmid}")
     except PermissionError:
         print("Erreur: permission refusee. Lancez en tant que root.")
         sys.exit(1)
