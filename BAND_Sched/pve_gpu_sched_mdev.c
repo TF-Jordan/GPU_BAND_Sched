@@ -669,7 +669,17 @@ static const struct vfio_device_ops pvegpu_vfio_ops = {
      * retourner -EINVAL sur les kernels avec iommufd actif.
      * C'est le meme pattern que le driver Intel GVT (i915/gvt/kvmgt.c).
      */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
+    /*
+     * Le champ a ete renomme dans le cycle 6.6+ :
+     *   6.2-6.5 : bind_iommufd_device / unbind_iommufd_device
+     *   6.6+    : bind_iommufd / unbind_iommufd
+     */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+    .bind_iommufd          = vfio_iommufd_emulated_bind,
+    .unbind_iommufd        = vfio_iommufd_emulated_unbind,
+    .attach_ioas           = vfio_iommufd_emulated_attach_ioas,
+    .detach_ioas           = vfio_iommufd_emulated_detach_ioas,
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
     .bind_iommufd_device   = vfio_iommufd_emulated_bind,
     .unbind_iommufd_device = vfio_iommufd_emulated_unbind,
     .attach_ioas           = vfio_iommufd_emulated_attach_ioas,
