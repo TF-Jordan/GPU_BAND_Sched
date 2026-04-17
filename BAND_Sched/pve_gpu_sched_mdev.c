@@ -223,7 +223,7 @@ void pvegpu_irq_trigger(struct pvegpu_vm_ctx *ctx)
  * Sur NVIDIA : analyse PFIFO_INTR et PGRAPH_INTR pour identifier
  * la source. Sur AMD : analyse GRBM interrupt status.
  */
-static irqreturn_t pvegpu_gpu_irq_handler(int irq, void *data)
+static irqreturn_t __maybe_unused pvegpu_gpu_irq_handler(int irq, void *data)
 {
     struct pvegpu_device *gdev = data;
     struct pvegpu_vm_ctx *ctx;
@@ -494,8 +494,7 @@ static long pvegpu_mdev_ioctl(struct vfio_device *vdev,
         case VFIO_PCI_BAR3_REGION_INDEX:
             info.size  = ctx->vram_size;
             info.flags = VFIO_REGION_INFO_FLAG_READ  |
-                         VFIO_REGION_INFO_FLAG_WRITE  |
-                         VFIO_REGION_INFO_FLAG_MMAP;
+                         VFIO_REGION_INFO_FLAG_WRITE;
             info.offset = VFIO_PCI_INDEX_TO_OFFSET(VFIO_PCI_BAR3_REGION_INDEX);
             break;
 
@@ -539,16 +538,21 @@ static long pvegpu_mdev_ioctl(struct vfio_device *vdev,
         return 0;
     }
 
-    case VFIO_DEVICE_RESET:
-        /* FLR (Function Level Reset) virtuel */
-        PVEGPU_INFO("device reset (FLR): vmid=%d\n", ctx->vmid);
+    case VFIO_DEVICE_RESET: {
+        unsigned long rst_flags;
 
-        if (gdev->gpu_ops && gdev->gpu_ops->context_reset)
-            return gdev->gpu_ops->context_reset(ctx);
+        PVEGPU_INFO("device reset (FLR): vmid=%d (software-only)\n",
+                    ctx->vmid);
 
-        /* Fallback generique */
         kfifo_reset(&ctx->suspended);
+
+        spin_lock_irqsave(&ctx->band_lock, rst_flags);
+        ctx->budget = ktime_set(0, 0);
+        ctx->bandwidth_used = ktime_set(0, 0);
+        spin_unlock_irqrestore(&ctx->band_lock, rst_flags);
+
         return 0;
+    }
 
     case VFIO_DEVICE_SET_IRQS: {
         struct vfio_irq_set hdr;
@@ -603,42 +607,23 @@ static int pvegpu_mdev_mmap(struct vfio_device *vdev,
 {
     struct pvegpu_vm_ctx *ctx = container_of(vdev, struct pvegpu_vm_ctx,
                                               vdev);
-    struct pvegpu_device *gdev = ctx->dev;
-    unsigned long size = vma->vm_end - vma->vm_start;
-    unsigned long phys_base;
-    unsigned long bar3_phys;
 
-    if (VFIO_PCI_OFFSET_TO_INDEX(vma->vm_pgoff << PAGE_SHIFT) !=
-        VFIO_PCI_BAR3_REGION_INDEX) {
-        PVEGPU_ERR("mmap: only BAR3 is mmappable\n");
-        return -EINVAL;
-    }
-
-    if (size > ctx->vram_size) {
-        PVEGPU_ERR("mmap: size %lu > vram_size %llu\n",
-                   size, ctx->vram_size);
-        return -EINVAL;
-    }
-
-    bar3_phys = pci_resource_start(gdev->pdev, 3);
-    phys_base = bar3_phys + pvegpu_ctx_addr_shift(ctx);
-
-    vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
-    pvegpu_vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
-
-    if (remap_pfn_range(vma,
-                        vma->vm_start,
-                        phys_base >> PAGE_SHIFT,
-                        size,
-                        vma->vm_page_prot)) {
-        PVEGPU_ERR("mmap: remap_pfn_range failed for vmid=%d\n",
-                   ctx->vmid);
-        return -EAGAIN;
-    }
-
-    PVEGPU_INFO("mmap BAR3: vmid=%d phys=0x%lx size=%lu\n",
-                ctx->vmid, phys_base, size);
-    return 0;
+    /*
+     * Le mmap direct des BARs GPU n'est pas possible en virtualisation
+     * imbriquee : remap_pfn_range d'adresses MMIO device cause un fault
+     * quand KVM L1 ne peut pas creer d'EPT entry pour une zone deja
+     * geree par le KVM L0.
+     *
+     * Tous les acces MMIO passent par les handlers read/write VFIO
+     * qui sont interceptes par notre scheduler. C'est plus lent
+     * qu'un mmap direct mais fonctionnel en nested virt.
+     *
+     * Sur bare metal (pas de nested virt), on pourrait activer le mmap
+     * direct pour BAR3 (VRAM) en ajoutant un parametre module.
+     */
+    PVEGPU_INFO("mmap: denied for vmid=%d (MMIO via read/write only)\n",
+                ctx->vmid);
+    return -EINVAL;
 }
 
 /*
@@ -925,18 +910,16 @@ static int pvegpu_pci_probe(struct pci_dev *pdev,
     gdev->dev = &pdev->dev;
     pci_set_drvdata(pdev, gdev);
 
-    /* Enregistrer l'IRQ GPU pour le forwarding */
-    ret = request_irq(pdev->irq, pvegpu_gpu_irq_handler,
-                      IRQF_SHARED, "pvegpu_sched", gdev);
-    if (ret) {
-        PVEGPU_ERR("pci_probe: request_irq failed: %d "
-                   "(IRQ forwarding disabled)\n", ret);
-        /* Non-fatal : on continue sans IRQ forwarding */
-    } else {
-        gdev->irq_registered = true;
-        PVEGPU_INFO("pci_probe: IRQ %d registered for forwarding\n",
-                    pdev->irq);
-    }
+    /*
+     * IRQ forwarding disabled: in nested virtualization, registering
+     * the GPU IRQ causes the handler to read/write GPU interrupt
+     * registers on every interrupt, which can cause IRQ storms or
+     * conflicts with the L0 hypervisor's interrupt management.
+     * QEMU handles guest IRQ injection via eventfd without needing
+     * a physical IRQ handler here.
+     */
+    gdev->irq_registered = false;
+    PVEGPU_INFO("pci_probe: IRQ forwarding disabled (safe for nested virt)\n");
 
     ret = PVEGPU_MDEV_REGISTER_PARENT(&gdev->mdev_parent, &pdev->dev,
                                        &pvegpu_mdev_driver,

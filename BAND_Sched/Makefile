@@ -11,7 +11,7 @@ pve_gpu_sched-objs := \
     pve_gpu_sched_mdev.o \
     pve_gpu_sched_bar.o
 
-ccflags-y := -DDEBUG -g
+ccflags-y := -g
 
 # Build targets
 all:
