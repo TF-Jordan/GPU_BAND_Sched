@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * pve_gpu_sched_band.c — Algorithme BAND (Bandwidth-Aware Non-preemptive
- * Dispatcher) pour le partage GPU entre VMs Proxmox.
+ * Deveice) pour le partage GPU entre VMs Proxmox.
  *
  * Traduction directe de gxen/tools/a3/band_scheduler.cc en C kernel.
  *
@@ -37,7 +37,7 @@
  * Appele par submit() apres chaque commande GPU.
  * Equivalent de context::update_budget() dans a3.
  */
-void pvegpu_ctx_update_budget(struct pvegpu_vm_ctx *ctx, ktime_t duration)
+static void pvegpu_ctx_update_budget(struct pvegpu_vm_ctx *ctx, ktime_t duration)
 {
     unsigned long flags;
 
@@ -227,9 +227,13 @@ static void pvegpu_submit(struct pvegpu_scheduler *sched,
 {
     struct pvegpu_cmd cmd;
     ktime_t t_start, t_end, duration;
+    unsigned long flags;
     int ret;
 
+    spin_lock_irqsave(&ctx->band_lock, flags);
     ret = kfifo_out(&ctx->suspended, &cmd, sizeof(cmd));
+    spin_unlock_irqrestore(&ctx->band_lock, flags);
+
     if (ret != sizeof(cmd)) {
         PVEGPU_ERR("submit: empty queue for vmid=%d\n", ctx->vmid);
         return;
@@ -343,7 +347,13 @@ static int pvegpu_run_thread(void *data)
         spin_unlock_irqrestore(&sched->sched_lock, flags);
 
         if (!next) {
-            schedule();
+            /* Si le compteur est desynchronise, evite une boucle infinie
+             * qui causerait un Kernel Panic (softlockup).
+             */
+            PVEGPU_ERR("run_thread: counter=%lld but no contexts have commands! resetting.\n",
+                       (long long)atomic64_read(&sched->counter));
+            atomic64_set(&sched->counter, 0);
+            msleep(1);
             continue;
         }
 
@@ -507,9 +517,13 @@ static int pvegpu_sampler_thread(void *data)
 void pvegpu_enqueue(struct pvegpu_vm_ctx *ctx, const struct pvegpu_cmd *cmd)
 {
     struct pvegpu_scheduler *sched = &ctx->dev->scheduler;
+    unsigned long flags;
     int ret;
 
+    spin_lock_irqsave(&ctx->band_lock, flags);
     ret = kfifo_in(&ctx->suspended, cmd, sizeof(*cmd));
+    spin_unlock_irqrestore(&ctx->band_lock, flags);
+
     if (ret != sizeof(*cmd)) {
         PVEGPU_ERR("enqueue: queue full for vmid=%d, dropping command\n",
                    ctx->vmid);
