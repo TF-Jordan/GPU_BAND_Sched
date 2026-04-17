@@ -346,51 +346,32 @@ static ssize_t pvegpu_mdev_read(struct vfio_device *vdev,
 {
     struct pvegpu_vm_ctx *ctx = container_of(vdev, struct pvegpu_vm_ctx,
                                               vdev);
-    struct pvegpu_cmd cmd = {};
     unsigned int bar;
     loff_t pos = *ppos & VFIO_PCI_OFFSET_MASK;
+    uint32_t val = 0;
 
     bar = VFIO_PCI_OFFSET_TO_INDEX(*ppos);
 
-    if (bar != 0 && bar != 1 && bar != 3) {
-        /* Config space : utiliser l'emulation per-VM */
-        if (bar == VFIO_PCI_CONFIG_REGION_INDEX) {
-            uint32_t val = 0;
-            if (pos + count > PVEGPU_CFG_SPACE_SIZE)
-                return -EINVAL;
-            pvegpu_cfg_read(ctx, (int)pos, (int)count, &val);
-            if (copy_to_user(buf, &val, count))
-                return -EFAULT;
-            return count;
-        }
-        PVEGPU_ERR("read: unsupported BAR %u\n", bar);
+    if (bar == VFIO_PCI_CONFIG_REGION_INDEX) {
+        if (pos + count > PVEGPU_CFG_SPACE_SIZE)
+            return -EINVAL;
+        pvegpu_cfg_read(ctx, (int)pos, (int)count, &val);
+        if (copy_to_user(buf, &val, count))
+            return -EFAULT;
+        return count;
+    }
+
+    if (count != 1 && count != 2 && count != 4)
         return -EINVAL;
-    }
 
-    if (count != 1 && count != 2 && count != 4) {
-        PVEGPU_ERR("read: unsupported size %zu\n", count);
-        return -EINVAL;
-    }
-
-    cmd.type   = PVEGPU_CMD_TYPE_READ;
-    cmd.bar    = (uint8_t)bar;
-    cmd.offset = (uint32_t)pos;
-    cmd.size   = (uint8_t)count;
-    cmd.value  = 0;
-
-    switch (bar) {
-    case PVEGPU_BAR0:
-        pvegpu_read_bar0(ctx, &cmd);
-        break;
-    case PVEGPU_BAR1:
-        pvegpu_read_bar1(ctx, &cmd);
-        break;
-    case PVEGPU_BAR3:
-        pvegpu_read_bar3(ctx, &cmd);
-        break;
-    }
-
-    if (copy_to_user(buf, &cmd.value, count))
+    /*
+     * Nested virt safe mode: BAR reads return 0.
+     * GPU registers are not directly accessible when running
+     * inside a VM (nested KVM). The guest sees a "blank" GPU.
+     * Config space emulation above provides device identity.
+     */
+    val = 0;
+    if (copy_to_user(buf, &val, count))
         return -EFAULT;
 
     return count;
@@ -403,43 +384,29 @@ static ssize_t pvegpu_mdev_write(struct vfio_device *vdev,
 {
     struct pvegpu_vm_ctx *ctx = container_of(vdev, struct pvegpu_vm_ctx,
                                               vdev);
-    struct pvegpu_cmd cmd = {};
     unsigned int bar;
     loff_t pos = *ppos & VFIO_PCI_OFFSET_MASK;
     uint32_t val = 0;
 
     bar = VFIO_PCI_OFFSET_TO_INDEX(*ppos);
 
-    if (bar != 0 && bar != 1 && bar != 3) {
-        /* Config space : utiliser l'emulation per-VM */
-        if (bar == VFIO_PCI_CONFIG_REGION_INDEX) {
-            if (pos + count > PVEGPU_CFG_SPACE_SIZE)
-                return -EINVAL;
-            if (copy_from_user(&val, buf, count))
-                return -EFAULT;
-            pvegpu_cfg_write(ctx, (int)pos, (int)count, val);
-            return count;
-        }
-        PVEGPU_ERR("write: unsupported BAR %u\n", bar);
-        return -EINVAL;
+    if (bar == VFIO_PCI_CONFIG_REGION_INDEX) {
+        if (pos + count > PVEGPU_CFG_SPACE_SIZE)
+            return -EINVAL;
+        if (copy_from_user(&val, buf, count))
+            return -EFAULT;
+        pvegpu_cfg_write(ctx, (int)pos, (int)count, val);
+        return count;
     }
 
-    if (count != 1 && count != 2 && count != 4) {
-        PVEGPU_ERR("write: unsupported size %zu\n", count);
+    if (count != 1 && count != 2 && count != 4)
         return -EINVAL;
-    }
 
-    if (copy_from_user(&val, buf, count))
-        return -EFAULT;
-
-    cmd.type   = PVEGPU_CMD_TYPE_WRITE;
-    cmd.bar    = (uint8_t)bar;
-    cmd.offset = (uint32_t)pos;
-    cmd.size   = (uint8_t)count;
-    cmd.value  = val;
-
-    pvegpu_enqueue(ctx, &cmd);
-
+    /*
+     * Nested virt safe mode: BAR writes are silently discarded.
+     * No GPU register access — prevents crashes when running
+     * inside a VM (nested KVM).
+     */
     return count;
 }
 

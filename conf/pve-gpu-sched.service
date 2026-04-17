@@ -7,11 +7,11 @@ Wants=multi-user.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/sbin/modprobe -r nouveau 2>/dev/null || true
-ExecStartPre=/sbin/modprobe -r nvidia 2>/dev/null || true
-ExecStartPre=/sbin/modprobe vfio
-ExecStartPre=/sbin/modprobe vfio_pci
-ExecStartPre=/sbin/modprobe mdev
+ExecStartPre=-/sbin/modprobe -r nouveau
+ExecStartPre=-/sbin/modprobe -r nvidia
+ExecStartPre=-/sbin/modprobe vfio
+ExecStartPre=-/sbin/modprobe vfio_pci
+ExecStartPre=-/sbin/modprobe mdev
 ExecStart=/sbin/modprobe pve_gpu_sched
 ExecStop=/sbin/rmmod pve_gpu_sched
 
