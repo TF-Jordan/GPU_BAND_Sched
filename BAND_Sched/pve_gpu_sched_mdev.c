@@ -223,7 +223,7 @@ void pvegpu_irq_trigger(struct pvegpu_vm_ctx *ctx)
  * Sur NVIDIA : analyse PFIFO_INTR et PGRAPH_INTR pour identifier
  * la source. Sur AMD : analyse GRBM interrupt status.
  */
-static irqreturn_t pvegpu_gpu_irq_handler(int irq, void *data)
+static irqreturn_t __maybe_unused pvegpu_gpu_irq_handler(int irq, void *data)
 {
     struct pvegpu_device *gdev = data;
     struct pvegpu_vm_ctx *ctx;
@@ -538,16 +538,20 @@ static long pvegpu_mdev_ioctl(struct vfio_device *vdev,
         return 0;
     }
 
-    case VFIO_DEVICE_RESET:
-        /* FLR (Function Level Reset) virtuel */
+    case VFIO_DEVICE_RESET: {
+        unsigned long rst_flags;
+
         PVEGPU_INFO("device reset (FLR): vmid=%d\n", ctx->vmid);
 
-        if (gdev->gpu_ops && gdev->gpu_ops->context_reset)
-            return gdev->gpu_ops->context_reset(ctx);
-
-        /* Fallback generique */
         kfifo_reset(&ctx->suspended);
+
+        spin_lock_irqsave(&ctx->band_lock, rst_flags);
+        ctx->budget = ktime_set(0, 0);
+        ctx->bandwidth_used = ktime_set(0, 0);
+        spin_unlock_irqrestore(&ctx->band_lock, rst_flags);
+
         return 0;
+    }
 
     case VFIO_DEVICE_SET_IRQS: {
         struct vfio_irq_set hdr;
@@ -895,18 +899,13 @@ static int pvegpu_pci_probe(struct pci_dev *pdev,
     gdev->dev = &pdev->dev;
     pci_set_drvdata(pdev, gdev);
 
-    /* Enregistrer l'IRQ GPU pour le forwarding */
-    ret = request_irq(pdev->irq, pvegpu_gpu_irq_handler,
-                      IRQF_SHARED, "pvegpu_sched", gdev);
-    if (ret) {
-        PVEGPU_ERR("pci_probe: request_irq failed: %d "
-                   "(IRQ forwarding disabled)\n", ret);
-        /* Non-fatal : on continue sans IRQ forwarding */
-    } else {
-        gdev->irq_registered = true;
-        PVEGPU_INFO("pci_probe: IRQ %d registered for forwarding\n",
-                    pdev->irq);
-    }
+    /*
+     * IRQ registration disabled: the GPU IRQ handler reads/writes
+     * GPU interrupt registers (PMC_INTR, PFIFO_INTR) which can
+     * cause instability. IRQ forwarding to VMs uses eventfd via
+     * VFIO_DEVICE_SET_IRQS instead.
+     */
+    gdev->irq_registered = false;
 
     ret = PVEGPU_MDEV_REGISTER_PARENT(&gdev->mdev_parent, &pdev->dev,
                                        &pvegpu_mdev_driver,
