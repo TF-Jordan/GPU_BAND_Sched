@@ -494,8 +494,7 @@ static long pvegpu_mdev_ioctl(struct vfio_device *vdev,
         case VFIO_PCI_BAR3_REGION_INDEX:
             info.size  = ctx->vram_size;
             info.flags = VFIO_REGION_INFO_FLAG_READ  |
-                         VFIO_REGION_INFO_FLAG_WRITE  |
-                         VFIO_REGION_INFO_FLAG_MMAP;
+                         VFIO_REGION_INFO_FLAG_WRITE;
             info.offset = VFIO_PCI_INDEX_TO_OFFSET(VFIO_PCI_BAR3_REGION_INDEX);
             break;
 
@@ -601,44 +600,15 @@ static long pvegpu_mdev_ioctl(struct vfio_device *vdev,
 static int pvegpu_mdev_mmap(struct vfio_device *vdev,
                              struct vm_area_struct *vma)
 {
-    struct pvegpu_vm_ctx *ctx = container_of(vdev, struct pvegpu_vm_ctx,
-                                              vdev);
-    struct pvegpu_device *gdev = ctx->dev;
-    unsigned long size = vma->vm_end - vma->vm_start;
-    unsigned long phys_base;
-    unsigned long bar3_phys;
-
-    if (VFIO_PCI_OFFSET_TO_INDEX(vma->vm_pgoff << PAGE_SHIFT) !=
-        VFIO_PCI_BAR3_REGION_INDEX) {
-        PVEGPU_ERR("mmap: only BAR3 is mmappable\n");
-        return -EINVAL;
-    }
-
-    if (size > ctx->vram_size) {
-        PVEGPU_ERR("mmap: size %lu > vram_size %llu\n",
-                   size, ctx->vram_size);
-        return -EINVAL;
-    }
-
-    bar3_phys = pci_resource_start(gdev->pdev, 3);
-    phys_base = bar3_phys + pvegpu_ctx_addr_shift(ctx);
-
-    vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
-    pvegpu_vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
-
-    if (remap_pfn_range(vma,
-                        vma->vm_start,
-                        phys_base >> PAGE_SHIFT,
-                        size,
-                        vma->vm_page_prot)) {
-        PVEGPU_ERR("mmap: remap_pfn_range failed for vmid=%d\n",
-                   ctx->vmid);
-        return -EAGAIN;
-    }
-
-    PVEGPU_INFO("mmap BAR3: vmid=%d phys=0x%lx size=%lu\n",
-                ctx->vmid, phys_base, size);
-    return 0;
+    /*
+     * mdev devices use read/write for all BAR access — this is the
+     * standard pattern (same as Intel GVT-g). Direct mmap of GPU
+     * BAR physical memory via remap_pfn_range is not safe when the
+     * device is managed by a mediating driver.
+     * All GPU register and VRAM access goes through the read/write
+     * VFIO handlers which are fully functional.
+     */
+    return -EINVAL;
 }
 
 /*
