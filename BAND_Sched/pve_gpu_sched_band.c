@@ -381,9 +381,10 @@ static int pvegpu_run_thread(void *data)
             /* Flusher TLB */
             if (sched->dev->gpu_ops &&
                 sched->dev->gpu_ops->flush_tlb) {
-                mutex_lock(&sched->tlb_flush_mutex);
+                unsigned long tlb_flags;
+                spin_lock_irqsave(&sched->tlb_flush_lock, tlb_flags);
                 sched->dev->gpu_ops->flush_tlb(next, 0x1 | 0x4);
-                mutex_unlock(&sched->tlb_flush_mutex);
+                spin_unlock_irqrestore(&sched->tlb_flush_lock, tlb_flags);
             }
         }
 
@@ -562,7 +563,7 @@ int pvegpu_sched_init(struct pvegpu_scheduler *sched,
 
     spin_lock_init(&sched->fire_lock);
     spin_lock_init(&sched->sched_lock);
-    mutex_init(&sched->tlb_flush_mutex);
+    spin_lock_init(&sched->tlb_flush_lock);
     init_waitqueue_head(&sched->wq);
 
     /* Demarrer le run_thread */
@@ -623,8 +624,6 @@ void pvegpu_sched_fini(struct pvegpu_scheduler *sched)
         kthread_stop(sched->run_thread);
         sched->run_thread = NULL;
     }
-
-    mutex_destroy(&sched->tlb_flush_mutex);
 
     PVEGPU_INFO("scheduler stopped (total cmds processed: %llu)\n",
                 sched->total_cmds_processed);

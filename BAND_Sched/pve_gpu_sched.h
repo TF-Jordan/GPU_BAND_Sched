@@ -21,7 +21,6 @@
 
 #include <linux/types.h>
 #include <linux/spinlock.h>
-#include <linux/mutex.h>
 #include <linux/list.h>
 #include <linux/kfifo.h>
 #include <linux/ktime.h>
@@ -463,8 +462,11 @@ struct pvegpu_scheduler {
 
     /* --- TLB flush serialization ---
      * Empeche les flushes TLB concurrents entre VMs.
+     * Spinlock (pas mutex) : le flush TLB est court (quelques us) et
+     * peut etre appele depuis pvegpu_write_bar0 qui tient deja fire_lock.
+     * Un mutex dormirait sous spinlock -> BUG kernel garanti.
      */
-    struct mutex       tlb_flush_mutex;
+    spinlock_t         tlb_flush_lock;
 
     /* --- Threads kernel ---
      * Equivalent de thread_, replenisher_, sampler_ dans a3.

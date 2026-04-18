@@ -492,10 +492,17 @@ static long pvegpu_mdev_ioctl(struct vfio_device *vdev,
             break;
 
         case VFIO_PCI_BAR3_REGION_INDEX:
-            info.size  = ctx->vram_size;
-            info.flags = VFIO_REGION_INFO_FLAG_READ  |
-                         VFIO_REGION_INFO_FLAG_WRITE  |
-                         VFIO_REGION_INFO_FLAG_MMAP;
+            /* BAR3 = fenetre VRAM. Taille = taille physique reelle de la BAR,
+             * PAS ctx->vram_size. On ne peut pas mapper plus que ce que le
+             * GPU expose physiquement. Le mmap direct est desactive : mapper
+             * bar3_phys + id*vram_size sortirait de la BAR physique et
+             * corromprait la memoire host (IOMMU fault ou pire).
+             * Les acces VRAM passent par read/write emules.
+             */
+            info.size  = gdev->bar_size[3] ? gdev->bar_size[3] :
+                         (256ULL << 20);
+            info.flags = VFIO_REGION_INFO_FLAG_READ |
+                         VFIO_REGION_INFO_FLAG_WRITE;
             info.offset = VFIO_PCI_INDEX_TO_OFFSET(VFIO_PCI_BAR3_REGION_INDEX);
             break;
 
@@ -603,42 +610,23 @@ static int pvegpu_mdev_mmap(struct vfio_device *vdev,
 {
     struct pvegpu_vm_ctx *ctx = container_of(vdev, struct pvegpu_vm_ctx,
                                               vdev);
-    struct pvegpu_device *gdev = ctx->dev;
-    unsigned long size = vma->vm_end - vma->vm_start;
-    unsigned long phys_base;
-    unsigned long bar3_phys;
-
-    if (VFIO_PCI_OFFSET_TO_INDEX(vma->vm_pgoff << PAGE_SHIFT) !=
-        VFIO_PCI_BAR3_REGION_INDEX) {
-        PVEGPU_ERR("mmap: only BAR3 is mmappable\n");
-        return -EINVAL;
-    }
-
-    if (size > ctx->vram_size) {
-        PVEGPU_ERR("mmap: size %lu > vram_size %llu\n",
-                   size, ctx->vram_size);
-        return -EINVAL;
-    }
-
-    bar3_phys = pci_resource_start(gdev->pdev, 3);
-    phys_base = bar3_phys + pvegpu_ctx_addr_shift(ctx);
-
-    vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
-    pvegpu_vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
-
-    if (remap_pfn_range(vma,
-                        vma->vm_start,
-                        phys_base >> PAGE_SHIFT,
-                        size,
-                        vma->vm_page_prot)) {
-        PVEGPU_ERR("mmap: remap_pfn_range failed for vmid=%d\n",
-                   ctx->vmid);
-        return -EAGAIN;
-    }
-
-    PVEGPU_INFO("mmap BAR3: vmid=%d phys=0x%lx size=%lu\n",
-                ctx->vmid, phys_base, size);
-    return 0;
+    /* Le mmap direct de BAR3 est desactive.
+     *
+     * Raison : mapper bar3_phys + (ctx->id * vram_size) est invalide en KVM.
+     * La BAR3 est une fenetre physique de taille fixe ; l'arithmetique
+     * d'offset sort de cette fenetre et pointe dans la memoire host.
+     * Resultat : IOMMU fault (kernel panic) ou corruption memoire silencieuse.
+     *
+     * Correction correcte : allouer des pages noyau par VM et les exposer
+     * via remap_pfn_range. A implémenter quand la baseline est stable.
+     *
+     * Pour l'instant : les acces VRAM passent par read/write emules.
+     * VFIO_REGION_INFO_FLAG_MMAP est retire de GET_REGION_INFO donc
+     * QEMU ne doit pas appeler ce chemin, mais on le refuse explicitement.
+     */
+    PVEGPU_ERR("mmap: direct BAR3 mmap disabled (emulated VRAM only) "
+               "vmid=%d\n", ctx->vmid);
+    return -ENODEV;
 }
 
 /*

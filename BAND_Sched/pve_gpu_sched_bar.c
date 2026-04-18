@@ -312,14 +312,17 @@ void pvegpu_write_bar0(struct pvegpu_vm_ctx *ctx, const struct pvegpu_cmd *cmd)
         break;
 
     case TLB_FLUSH_TRIGGER:
-        /* TLB_FLUSH_TRIGGER : serialiser les flushes entre VMs
-         * via le tlb_flush_mutex du scheduler.
+        /* TLB_FLUSH_TRIGGER : serialiser les flushes entre VMs.
+         * Spinlock obligatoire ici : cette fonction peut etre appelee
+         * depuis pvegpu_submit() qui tient fire_lock (spinlock).
+         * Un mutex dormirait sous spinlock -> BUG kernel.
          */
-        mutex_lock(&gdev->scheduler.tlb_flush_mutex);
-        spin_lock_irqsave(&gdev->mutex, flags);
-        pvegpu_bar_write32(gdev, 0, cmd->offset, cmd->value);
-        spin_unlock_irqrestore(&gdev->mutex, flags);
-        mutex_unlock(&gdev->scheduler.tlb_flush_mutex);
+        {
+            unsigned long tlb_flags;
+            spin_lock_irqsave(&gdev->scheduler.tlb_flush_lock, tlb_flags);
+            pvegpu_bar_write32(gdev, 0, cmd->offset, cmd->value);
+            spin_unlock_irqrestore(&gdev->scheduler.tlb_flush_lock, tlb_flags);
+        }
         PVEGPU_LOG("BAR0 TLB_FLUSH_TRIGGER vmid=%d val=0x%x (serialized)\n",
                    ctx->vmid, cmd->value);
         return;  /* deja ecrit */
@@ -823,7 +826,7 @@ void pvegpu_shadow_bar1(struct pvegpu_vm_ctx *ctx)
  * FLUSH TLB GPU — serialise entre VMs
  *
  * Utilise le shadow page directory de chaque VM pour le flush.
- * Le tlb_flush_mutex du scheduler empeche les flush concurrents.
+ * Le tlb_flush_lock du scheduler empeche les flush concurrents.
  * ============================================================ */
 
 int pvegpu_flush_tlb(struct pvegpu_vm_ctx *ctx, uint32_t engine)
