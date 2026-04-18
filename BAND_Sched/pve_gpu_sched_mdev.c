@@ -254,10 +254,16 @@ static irqreturn_t pvegpu_gpu_irq_handler(int irq, void *data)
         pvegpu_irq_trigger(ctx);
 
     /* Pour les interruptions PFIFO, notifier aussi les VMs
-     * qui ont des canaux actifs correspondants. Cela permet
-     * aux VMs en attente de completion de recevoir leur signal.
+     * qui ont des canaux actifs correspondants.
+     * Protection : sched_lock serialise les acces a gdev->contexts[]
+     * avec pvegpu_ctx_init() (qui set contexts[slot]) et
+     * pvegpu_ctx_destroy() (qui met contexts[slot]=NULL).
+     * Sans ce lock, on pourrait dereferencier un pointeur libere
+     * si une VM est detruite pendant que l'IRQ handler tourne.
      */
     if (pfifo_intr) {
+        unsigned long irq_flags;
+        spin_lock_irqsave(&gdev->scheduler.sched_lock, irq_flags);
         for (i = 0; i < PVEGPU_MAX_DOMAINS; i++) {
             struct pvegpu_vm_ctx *vm = gdev->contexts[i];
             if (!vm || vm == ctx || !vm->initialized)
@@ -267,6 +273,7 @@ static irqreturn_t pvegpu_gpu_irq_handler(int irq, void *data)
                 pvegpu_irq_trigger(vm);
             }
         }
+        spin_unlock_irqrestore(&gdev->scheduler.sched_lock, irq_flags);
     }
 
     /* Acquitter l'interruption */

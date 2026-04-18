@@ -148,8 +148,14 @@ static int nvc0_context_reset(struct pvegpu_vm_ctx *ctx)
     ctx->bandwidth_used = ktime_set(0, 0);
     spin_unlock_irqrestore(&ctx->band_lock, flags);
 
-    if (gdev->gpu_ops && gdev->gpu_ops->flush_tlb)
-        gdev->gpu_ops->flush_tlb(ctx, 0x1 | 0x4);
+    /* Ne pas appeler flush_tlb ici : les registres TLB flush sont
+     * specifiques a l'architecture (Fermi = 0x100cb8/0x100cbc).
+     * Sur Turing (chipset 0x16x) ces registres n'existent pas.
+     * Ecrire a ces adresses sur Turing peut declencher une MCE
+     * (Machine Check Exception) et crasher l'host.
+     * Le flush TLB n'est necessaire qu'au context switch entre VMs,
+     * pas lors du reset initial d'un contexte sans mappings VRAM.
+     */
 
     PVEGPU_INFO("FLR: context reset complete vmid=%d\n", ctx->vmid);
     return 0;
