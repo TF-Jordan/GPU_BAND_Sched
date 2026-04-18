@@ -9,6 +9,15 @@ DKMS_SRC = usr/src/$(PACKAGE_NAME)-$(PACKAGE_VERSION)
 %:
 	dh $@
 
+override_dh_autoreconf:
+	# Ce projet n'utilise pas autotools. Sans cet override, dh_autoreconf
+	# detecte des fichiers config.guess dans les sous-repertoires (ex: gxen-master)
+	# et les sauvegarde. Si ces repertoires disparaissent, dh_clean plante
+	# en essayant de les restaurer.
+
+override_dh_autoreconf_clean:
+	# Pas de fichiers autotools a restaurer.
+
 override_dh_auto_configure:
 override_dh_auto_build:
 override_dh_auto_test:
