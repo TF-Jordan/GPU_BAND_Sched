@@ -1,0 +1,21 @@
+[Unit]
+Description=Cricket GPU Remoting RPC Server
+Documentation=https://github.com/TF-Jordan/GPU_BAND_Sched
+After=network-online.target rpcbind.service
+Wants=network-online.target rpcbind.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/cricket/server.conf
+Environment=LD_LIBRARY_PATH=/usr/local/lib/cricket:/usr/local/cuda/lib64
+ExecStart=/usr/local/bin/cricket-rpc-server
+Restart=on-failure
+RestartSec=3
+User=cricket
+Group=cricket
+SupplementaryGroups=video render
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

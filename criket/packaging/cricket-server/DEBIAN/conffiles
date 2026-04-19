@@ -1,0 +1,3 @@
+/etc/cricket/server.conf
+/etc/systemd/system/cricket-rpc.service
+/etc/profile.d/cricket-server.sh

@@ -1,0 +1,47 @@
+#!/bin/sh
+# cricket-run: launch a CUDA application through the Cricket RPC client.
+#
+# Reads /etc/cricket/client.conf (overridable via env vars) and executes the
+# given command with LD_PRELOAD set to cricket-client.so and REMOTE_GPU_ADDRESS
+# pointing at the configured server.
+
+set -e
+
+CRICKET_LIB_DIR="${CRICKET_LIB_DIR:-/usr/local/lib/cricket}"
+CRICKET_CLIENT_SO="${CRICKET_CLIENT_SO:-${CRICKET_LIB_DIR}/cricket-client.so}"
+CRICKET_CONF="${CRICKET_CONF:-/etc/cricket/client.conf}"
+
+if [ -r "$CRICKET_CONF" ]; then
+    # shellcheck disable=SC1090
+    . "$CRICKET_CONF"
+fi
+
+if [ -z "$REMOTE_GPU_ADDRESS" ] || [ -z "$REMOTE_GPU_PORT" ]; then
+    echo "cricket-run: REMOTE_GPU_ADDRESS / REMOTE_GPU_PORT not set (edit $CRICKET_CONF)" >&2
+    exit 2
+fi
+
+if [ ! -r "$CRICKET_CLIENT_SO" ]; then
+    echo "cricket-run: client library not found at $CRICKET_CLIENT_SO" >&2
+    exit 2
+fi
+
+if [ $# -eq 0 ]; then
+    cat <<'USAGE' >&2
+Usage: cricket-run <command> [args...]
+
+Examples:
+  cricket-run nvidia-smi
+  cricket-run python3 train.py
+  cricket-run ./my_cuda_app
+
+Configuration: /etc/cricket/client.conf
+USAGE
+    exit 1
+fi
+
+export REMOTE_GPU_ADDRESS="${REMOTE_GPU_ADDRESS}:${REMOTE_GPU_PORT}"
+export LD_LIBRARY_PATH="${CRICKET_LIB_DIR}:${LD_LIBRARY_PATH}"
+export LD_PRELOAD="${CRICKET_CLIENT_SO}${LD_PRELOAD:+:$LD_PRELOAD}"
+
+exec "$@"

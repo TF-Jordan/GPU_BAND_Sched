@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+CRICKET_USER="cricket"
+CRICKET_HOME="/var/lib/cricket"
+
+if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+case "$1" in
+    purge)
+        if getent passwd "$CRICKET_USER" >/dev/null; then
+            deluser --system "$CRICKET_USER" >/dev/null 2>&1 || true
+        fi
+        rm -rf "$CRICKET_HOME"
+        rm -rf /etc/cricket
+        ;;
+esac
+
+exit 0

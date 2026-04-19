@@ -1,0 +1,16 @@
+Package: cricket-server
+Version: 0.0.1
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: libc6, libssl3, libelf1, rpcbind, libtirpc-common
+Recommends: cuda-toolkit-12-4 | cuda-toolkit-12-6 | cuda-toolkit-13-0
+Maintainer: Fivet Engineer <fivet.engineer@gmail.com>
+Homepage: https://github.com/TF-Jordan/GPU_BAND_Sched
+Description: Cricket GPU Remoting RPC server
+ Cricket is a virtualization layer for CUDA applications allowing remote
+ execution of GPU kernels via ONC RPC. This package installs the RPC server
+ component that runs on a host equipped with an NVIDIA GPU.
+ .
+ A systemd unit (cricket-rpc.service) is registered and started at
+ installation. Configuration is stored in /etc/cricket/server.conf.

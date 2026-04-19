@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+CRICKET_SERVICE="cricket-rpc.service"
+
+if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
+    systemctl stop "$CRICKET_SERVICE" >/dev/null 2>&1 || true
+    systemctl disable "$CRICKET_SERVICE" >/dev/null 2>&1 || true
+fi
+
+exit 0

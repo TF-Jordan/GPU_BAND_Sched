@@ -1,0 +1,4 @@
+dist/
+cricket-server/usr/local/bin/cricket-rpc-server
+cricket-server/usr/local/lib/cricket/*.so*
+cricket-client/usr/local/lib/cricket/*.so*

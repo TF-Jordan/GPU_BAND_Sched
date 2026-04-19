@@ -1,0 +1,16 @@
+Package: cricket-client
+Version: 0.0.1
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: libc6, libssl3, libelf1
+Maintainer: Fivet Engineer <fivet.engineer@gmail.com>
+Homepage: https://github.com/TF-Jordan/GPU_BAND_Sched
+Description: Cricket GPU Remoting client library and wrapper
+ Cricket is a virtualization layer for CUDA applications allowing remote
+ execution of GPU kernels via ONC RPC. This package installs the client
+ library (cricket-client.so) and a cricket-run wrapper that sets up
+ LD_PRELOAD and REMOTE_GPU_ADDRESS automatically from
+ /etc/cricket/client.conf.
+ .
+ No NVIDIA driver is required on the client machine.

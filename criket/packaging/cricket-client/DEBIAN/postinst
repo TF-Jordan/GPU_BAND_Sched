@@ -1,0 +1,30 @@
+#!/bin/sh
+set -e
+
+CLIENT_CONF="/etc/cricket/client.conf"
+
+if [ -f "$CLIENT_CONF" ]; then
+    REMOTE_ADDR=$(awk -F= '/^REMOTE_GPU_ADDRESS=/ {print $2}' "$CLIENT_CONF" | tr -d ' ')
+    REMOTE_PORT=$(awk -F= '/^REMOTE_GPU_PORT=/ {print $2}' "$CLIENT_CONF" | tr -d ' ')
+
+    if [ -n "$REMOTE_ADDR" ] && [ -n "$REMOTE_PORT" ] && command -v nc >/dev/null 2>&1; then
+        if nc -z -w 2 "$REMOTE_ADDR" "$REMOTE_PORT" >/dev/null 2>&1; then
+            echo "cricket-client: reachability OK ($REMOTE_ADDR:$REMOTE_PORT)"
+        else
+            echo "cricket-client: cannot reach $REMOTE_ADDR:$REMOTE_PORT (check /etc/cricket/client.conf)"
+        fi
+    fi
+fi
+
+cat <<'MSG'
+cricket-client installed.
+
+  1. Edit /etc/cricket/client.conf to set REMOTE_GPU_ADDRESS / REMOTE_GPU_PORT
+  2. Run a CUDA application via:
+         cricket-run <command>
+     Examples:
+         cricket-run nvidia-smi
+         cricket-run python3 train.py
+MSG
+
+exit 0

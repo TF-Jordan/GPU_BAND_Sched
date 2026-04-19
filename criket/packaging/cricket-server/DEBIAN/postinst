@@ -1,0 +1,54 @@
+#!/bin/sh
+set -e
+
+CRICKET_USER="cricket"
+CRICKET_HOME="/var/lib/cricket"
+CRICKET_CONF="/etc/cricket/server.conf"
+CRICKET_SERVICE="cricket-rpc.service"
+
+if ! getent passwd "$CRICKET_USER" >/dev/null; then
+    adduser --system --group --home "$CRICKET_HOME" --no-create-home \
+            --shell /usr/sbin/nologin "$CRICKET_USER" >/dev/null
+fi
+
+for grp in video render; do
+    if getent group "$grp" >/dev/null; then
+        adduser "$CRICKET_USER" "$grp" >/dev/null 2>&1 || true
+    fi
+done
+
+mkdir -p "$CRICKET_HOME"
+chown "$CRICKET_USER":"$CRICKET_USER" "$CRICKET_HOME"
+
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "cricket-server: warning: nvidia-smi not found. Install the NVIDIA driver before starting cricket-rpc."
+fi
+
+if [ ! -L /usr/local/cuda ] && [ ! -d /usr/local/cuda ]; then
+    for candidate in /usr/local/cuda-13.0 /usr/local/cuda-12.6 /usr/local/cuda-12.4 /usr/local/cuda-12.1; do
+        if [ -d "$candidate" ]; then
+            ln -sf "$candidate" /usr/local/cuda
+            echo "cricket-server: symlinked /usr/local/cuda -> $candidate"
+            break
+        fi
+    done
+fi
+
+if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
+    systemctl daemon-reload
+    systemctl enable rpcbind.service >/dev/null 2>&1 || true
+    systemctl start rpcbind.service >/dev/null 2>&1 || true
+    systemctl enable "$CRICKET_SERVICE" >/dev/null 2>&1 || true
+
+    if systemctl start "$CRICKET_SERVICE"; then
+        echo "cricket-server: service started"
+        RPC_PORT=$(awk -F= '/^RPC_PORT=/ {print $2}' "$CRICKET_CONF" 2>/dev/null | tr -d ' ')
+        [ -n "$RPC_PORT" ] && echo "cricket-server: listening on TCP port $RPC_PORT"
+    else
+        echo "cricket-server: service failed to start, check 'journalctl -u $CRICKET_SERVICE'"
+    fi
+else
+    echo "cricket-server: systemd not detected, start cricket-rpc-server manually"
+fi
+
+exit 0
