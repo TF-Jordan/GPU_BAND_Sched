@@ -6,7 +6,33 @@
 \chapter{Analyse et Conception}
 \label{cp:analyse-conception}
 
-Ce chapitre presente l'analyse detaillee des contraintes du systeme, la conception de chaque sous-systeme, et les elements cles d'implementation du projet \textit{omega-remote-paging}. L'objectif est de justifier chaque choix architectural par rapport aux alternatives ecartees, en ancrant chaque decision dans les structures de donnees, les constantes et les invariants reels du code source. Le chapitre couvre successivement l'analyse du probleme (section~\ref{sec:analyse-probleme}), l'architecture generale (section~\ref{sec:architecture-generale}), puis chacun des six axes fonctionnels du systeme : paging distant~\cite{clark_2005}, quotas, scheduler vCPU, scheduler disque, multiplexeur GPU et migration automatique. La section~\ref{sec:implementation} detaille les choix d'implementation concrets avant la synthese finale (section~\ref{sec:synthese}).
+\section*{Introduction}
+
+\paragraph{Contexte et motivation.}
+La virtualisation est devenue le socle des infrastructures de calcul modernes, qu'il s'agisse de \textit{clouds} publics ou de \textit{data centers} privés~\cite{verma_2015_borg}. Dans un cluster Proxmox~VE de production~\cite{proxmox_doc}, les ressources physiques sont toutefois cloisonnées par nœud : un nœud A saturé à 90~\% de mémoire ne peut accueillir aucune nouvelle VM, alors même que des nœuds B et C voisins disposent collectivement de capacités inexploitées. La même asymétrie affecte les processeurs virtuels (vCPU), la mémoire vidéo (VRAM) et les entrées/sorties disque. Au-delà du gaspillage, ce cloisonnement statique pénalise les charges variables et empêche tout consolidation opportuniste.
+
+\paragraph{Travaux antérieurs et limites.}
+La désagrégation des ressources --- qui consiste à découpler les composants matériels du serveur \textit{monolithique} pour les exposer sous forme de pools réseau --- a fait l'objet de contributions majeures depuis 2017. INFINISWAP~\cite{gu_2017_infiniswap} démontre la viabilité du paging distant sur RDMA en remplaçant le swap Linux par un pilote bloc dédié. LegoOS~\cite{shan_2018_legoos} propose une architecture où chaque ressource (CPU, RAM, stockage) est hébergée par un \textit{monitor} distinct, avec un noyau distribué. Carbink~\cite{zhou_2022_carbink} introduit la tolérance aux pannes par codage à effacement pour la mémoire distante. Pond~\cite{li_2023_pond} explore la mutualisation matérielle via CXL. Toutes ces approches partagent cependant trois limitations qui les rendent inapplicables aux clusters Proxmox de production~: (i)~elles requièrent du matériel spécialisé (RDMA, CXL) souvent absent des déploiements \textit{commodity}~; (ii)~elles supposent des modifications du noyau Linux ou de l'OS invité, incompatibles avec les politiques de support des distributions entreprise~; (iii)~elles se concentrent sur la mémoire et ne coordonnent pas l'arbitrage des autres ressources (vCPU, GPU, I/O disque) à l'échelle du cluster. Les ordonnanceurs commerciaux tels que VMware~DRS~\cite{gulati_2012_drs} adressent partiellement cette dernière limitation, mais demeurent verrouillés sur leur fournisseur et n'intègrent pas le paging distant comme primitive de premier ordre.
+
+\paragraph{Contributions.}
+Ce chapitre présente la conception et l'implémentation d'\textit{omega-remote-paging}, un système qui répond simultanément aux trois limitations identifiées. Les contributions principales sont les suivantes~:
+
+\begin{enumerate}[label=\textbf{T\arabic*.}, leftmargin=*]
+    \item \textbf{Architecture en espace utilisateur pur} reposant exclusivement sur les interfaces standard du noyau Linux (\texttt{userfaultfd}~\cite{userfaultfd_man}, cgroups~v2~\cite{cgroups_v2_doc}, PSI~\cite{psi_doc}, QMP~\cite{qemu_doc}). Aucune modification du noyau hôte ni du système invité n'est requise, ce qui rend la solution déployable sur tout cluster Proxmox~VE 8.x ou 9.x sans recompilation (section~\ref{sec:paging-distant}).
+
+    \item \textbf{Invariant formel de quota multi-ressources}, défini par la \autoref{prop:quota-invariant}, garanti à l'admission par le contrôleur Python \emph{et} à chaque écriture de page par le daemon Rust. Cet invariant établit que la consommation totale (locale + distante) d'une VM ne dépasse jamais son quota négocié à la création (section~\ref{sec:quotas}).
+
+    \item \textbf{Protocole binaire à entête fixe} (20~octets), dimensionné pour atteindre une latence de rappel inférieure à 2~ms sur Gigabit~Ethernet ; le coût de chiffrement TLS~1.3 par page (4~Kio) est borné à $\sim$1,2~\textmu{}s, négligeable devant la latence réseau (section~\ref{subsec:protocole-tcp}).
+
+    \item \textbf{Boucle de rétroaction adaptative} \texttt{FaultBus} $\leftrightarrow$ \texttt{AdaptiveInterval} qui couple en temps réel le taux de défauts de page entrants au rythme d'éviction sortant, prévenant ainsi le phénomène de \textit{thrashing} décrit dans la littérature sur le paging distant~\cite{aguilera_2017_remote_memory} (section~\ref{subsec:faultbus}).
+
+    \item \textbf{Découpage Rust/Python} tirant parti du système de types de Rust pour garantir l'absence de \textit{data races} sur le plan de données (latences déterministes), et de la flexibilité de Python pour le plan de contrôle (politiques de cluster). Le pont entre les deux couches s'effectue via un sous-processus JSON minimal qui peut basculer en mode \textit{fallback} Python pur en cas d'absence du binaire Rust (section~\ref{subsec:pont-python-rust}).
+
+    \item \textbf{Politique de migration multi-critères} pondérée par cinq facteurs (RAM, vCPU, VRAM GPU, I/O disque, consolidation), couplée à un \emph{circuit-breaker} par nœud~\cite{nygard_release} qui isole les pannes temporaires sans bloquer la prise de décision globale (sections~\ref{sec:migration} et~\ref{sec:orchestration}).
+\end{enumerate}
+
+\paragraph{Plan du chapitre.}
+La section~\ref{sec:analyse-probleme} formalise le problème, recense les travaux antérieurs et fixe les objectifs de conception. La section~\ref{sec:architecture-generale} introduit le modèle système, la notation employée et l'architecture en couches Rust/Python. Les sections~\ref{sec:paging-distant} à~\ref{sec:gpu-multiplexer} décrivent chacun des cinq sous-systèmes en partant de leur problématique propre, en explicitant les algorithmes et en justifiant les choix face aux alternatives. La section~\ref{sec:migration} présente la politique de migration cluster-wide ; la section~\ref{sec:orchestration} traite de l'orchestration et de la résilience ; la section~\ref{sec:observabilite} couvre l'observabilité ; la section~\ref{sec:implementation} détaille l'implémentation. La section~\ref{sec:discussion} discute les limites et les directions de travail futur, avant la synthèse finale (section~\ref{sec:synthese}).
 
 % =============================================================================
 \section{Analyse du probleme et des contraintes}
@@ -54,34 +80,117 @@ L'analyse du comportement reel des VMs sur un cluster Proxmox de trois n\oe{}uds
 Il est essentiel de noter que le stockage des disques virtuels n'est \textit{pas} concerne par cette mutualisation. Le projet suppose l'utilisation de Ceph RBD comme backend de stockage partage entre les n\oe{}uds~\cite{ceph_doc}, ce qui implique que seule la RAM doit etre transferee lors d'une migration de VM~\cite{clark_2005}.
 
 % -----------------------------------------------------------------------------
-\subsection{Contraintes non fonctionnelles retenues}
+\subsection{État de l'art et positionnement}
+\label{subsec:etat-de-l-art}
+% -----------------------------------------------------------------------------
+
+La désagrégation des ressources de calcul est étudiée depuis le milieu des années 2010 et regroupe trois grandes familles d'approches.
+
+\paragraph{Désagrégation mémoire logicielle.}
+INFINISWAP~\cite{gu_2017_infiniswap} expose la mémoire distante sous la forme d'un périphérique bloc Linux accessible par RDMA, atteignant des latences de l'ordre de 4~\textmu{}s. Carbink~\cite{zhou_2022_carbink} ajoute la tolérance aux pannes par codage à effacement, au prix d'un surcoût en bande passante. Ces systèmes supposent la présence de cartes RDMA InfiniBand ou RoCE et un investissement matériel significatif. À l'inverse, omega-remote-paging cible les déploiements \textit{commodity} sur Gigabit/10\,GbE et accepte une latence cible plus élevée ($<$2~ms) en contrepartie d'une universalité de déploiement.
+
+\paragraph{Désagrégation au niveau du système d'exploitation.}
+LegoOS~\cite{shan_2018_legoos} pousse la logique à l'extrême en proposant un système d'exploitation distribué (\textit{splitkernel}) où chaque composant matériel est servi par un monitor dédié sur le réseau. Cette approche maximise la flexibilité mais exige une refonte complète de la pile logicielle et reste incompatible avec QEMU/KVM. Le présent travail prend le parti opposé en s'intégrant à l'écosystème Proxmox~VE existant sans aucune modification kernel.
+
+\paragraph{Désagrégation mémoire matérielle.}
+Pond~\cite{li_2023_pond} explore la mutualisation mémoire via CXL (\textit{Compute Express Link}). Bien que prometteuse, cette voie reste dépendante du déploiement de cartes mères et de modules CXL encore peu répandus. Elle constitue une direction matérielle complémentaire qui pourra, à terme, augmenter les capacités atteignables par les approches logicielles décrites ici.
+
+\paragraph{Ordonnancement multi-ressources.}
+VMware~DRS~\cite{gulati_2012_drs} est l'exemple canonique d'un ordonnanceur cluster multi-critères en environnement de virtualisation propriétaire. Borg~\cite{verma_2015_borg} fournit le modèle de référence en environnement Linux. Ces systèmes ne prennent toutefois pas en compte la mémoire distante comme primitive d'admission : ils décident où placer une VM mais n'arbitrent pas les pages individuelles. La \texttt{MigrationPolicy} décrite à la section~\ref{sec:migration} étend les principes de DRS en y intégrant le quota distant et la pression PSI comme signaux de premier ordre.
+
+\paragraph{Synthèse du positionnement.}
+La table~\ref{tab:positionnement-etat-art} résume le positionnement d'\textit{omega-remote-paging} face aux travaux de référence selon cinq critères discriminants.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Positionnement par rapport aux principaux systèmes de désagrégation.}
+    \label{tab:positionnement-etat-art}
+    \footnotesize
+    \begin{tabular}{p{0.16\linewidth} c c c c c}
+        \toprule
+        \textbf{Système} & \textbf{Kernel modifié} & \textbf{Matériel spécialisé} & \textbf{Multi-ressource} & \textbf{Cible} & \textbf{Année} \\
+        \midrule
+        INFINISWAP~\cite{gu_2017_infiniswap}      & non      & RDMA & RAM seule        & swap Linux       & 2017 \\
+        LegoOS~\cite{shan_2018_legoos}            & OS dédié & RDMA & oui              & nouvelle pile    & 2018 \\
+        Carbink~\cite{zhou_2022_carbink}          & non      & RDMA & RAM seule        & Google internal  & 2022 \\
+        Pond~\cite{li_2023_pond}                  & non      & CXL  & RAM seule        & cloud Azure      & 2023 \\
+        VMware~DRS~\cite{gulati_2012_drs}         & --       & non  & oui (sans RAM\,d.) & vSphere        & 2012 \\
+        \textbf{omega-remote-paging}              & \textbf{non} & \textbf{non} & \textbf{oui (RAM, vCPU, GPU, I/O)} & \textbf{Proxmox VE} & \textbf{2026} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+À notre connaissance, \textit{omega-remote-paging} est le premier système de mutualisation des ressources cluster ciblant explicitement Proxmox~VE en espace utilisateur pur, et combinant paging distant, scheduler vCPU élastique, multiplexeur GPU et arbitrage I/O via cgroups~v2 dans une politique cluster cohérente.
+
+% -----------------------------------------------------------------------------
+\subsection{Objectifs de conception}
 \label{subsec:contraintes-nf}
 % -----------------------------------------------------------------------------
 
-L'analyse des exigences operationnelles conduit a cinq contraintes non fonctionnelles qui guident l'ensemble des choix de conception :
+À l'analyse précédente et au positionnement face à l'état de l'art, nous attachons cinq objectifs de conception (\textbf{G1}--\textbf{G5}) qui structurent l'ensemble des décisions techniques du chapitre. Chaque objectif est traçable jusqu'aux mécanismes qui le réalisent et aux invariants qui le garantissent.
 
-\begin{enumerate}[label=\textbf{C\arabic*.}]
-    \item \textbf{Latence de rappel de page inferieure a 2~ms sur Gigabit Ethernet.} Cette contrainte impose l'utilisation d'un protocole TCP binaire a en-tete fixe de 20~octets plut\^ot qu'un format textuel (JSON, Protocol Buffers) qui introduirait un surcout de serialisation incompatible avec le budget de latence.
-    \item \textbf{Transparence totale pour les VMs.} L'hyperviseur QEMU/KVM n'est pas modifie. Les VMs ne savent pas que leur memoire peut resider partiellement sur un n\oe{}ud distant. Cette contrainte exclut les approches de para-virtualisation memoire.
-    \item \textbf{Fonctionnement en espace utilisateur pur.} Aucune modification du noyau Linux n'est necessaire. Toutes les operations passent par des interfaces noyau standard : \texttt{userfaultfd}~\cite{userfaultfd_man}, cgroups v2~\cite{cgroups_v2_doc}, QMP, \texttt{/proc/meminfo}.
-    \item \textbf{Resilience a la perte d'un n\oe{}ud.} Un n\oe{}ud inaccessible ne doit pas bloquer le reste du cluster. Les decisions de politique doivent pouvoir fonctionner avec des donnees en cache (TTL de 120~secondes dans le \texttt{ResilientCollector}, fichier \texttt{resilient\_collector.py}, ligne~67).
-    \item \textbf{Invariant formel de quota.} Pour toute VM $v$ et a tout instant :
-    \begin{equation}
-        \label{eq:quota-invariant}
-        \texttt{local\_pages}(v) + \texttt{remote\_pages}(v) \leq \texttt{max\_mem}(v)
-    \end{equation}
-    Cet invariant est garanti a la fois par le contr\^oleur Python a l'admission et par le daemon Rust a chaque ecriture de page.
+\begin{enumerate}[label=\textbf{G\arabic*.}, leftmargin=*]
+    \item \textbf{Latence de rappel bornée par 2~ms sur Gigabit~Ethernet.} Objectif quantitatif imposant un protocole binaire à entête fixe de 20~octets (section~\ref{subsec:protocole-tcp}) plutôt qu'un format textuel (JSON, Protocol Buffers) dont le surcoût de désérialisation serait incompatible avec le budget de latence.
+    \item \textbf{Transparence totale pour les VMs.} L'hyperviseur QEMU/KVM et le système invité ne sont pas modifiés~; les VMs ignorent que leur mémoire peut résider partiellement à distance. Cette contrainte exclut la para-virtualisation mémoire et justifie le recours à \texttt{userfaultfd} (section~\ref{subsec:userfaultfd}).
+    \item \textbf{Fonctionnement en espace utilisateur pur.} Aucune modification du noyau Linux. Toutes les opérations passent par des interfaces noyau standard : \texttt{userfaultfd}~\cite{userfaultfd_man}, cgroups~v2~\cite{cgroups_v2_doc}, QMP~\cite{qemu_doc}, PSI~\cite{psi_doc}, \texttt{/proc/meminfo}. Cet objectif découle directement du positionnement face à LegoOS (table~\ref{tab:positionnement-etat-art}).
+    \item \textbf{Résilience à la perte d'un nœud.} Un nœud inaccessible ne doit pas bloquer le reste du cluster. Les politiques doivent pouvoir s'appuyer sur des données en cache (TTL de 120~s dans le \texttt{ResilientCollector}, section~\ref{subsec:collecte-resiliente}) selon le patron \emph{circuit-breaker}~\cite{nygard_release}.
+    \item \textbf{Sûreté formelle de l'allocation.} À tout instant, la consommation mémoire d'une VM (locale + distante) doit rester bornée par le quota négocié à la création. Cet invariant fait l'objet de la \autoref{prop:quota-invariant} et constitue le fondement de la fiabilité du système.
 \end{enumerate}
 
-La section suivante presente l'architecture generale qui repond a ces contraintes.
+La section suivante introduit le modèle système et la notation employée, puis présente l'architecture en couches qui réalise ces cinq objectifs.
 
 % =============================================================================
-\section{Architecture generale du systeme}
+\section{Modèle système et architecture}
 \label{sec:architecture-generale}
 % =============================================================================
 
 % -----------------------------------------------------------------------------
-\subsection{Decoupage en couches et choix de separation Rust/Python}
+\subsection{Modèle système et notation}
+\label{subsec:modele-systeme}
+% -----------------------------------------------------------------------------
+
+Nous formalisons le système comme un ensemble fini de nœuds homogènes hébergeant un ensemble dynamique de machines virtuelles. La table~\ref{tab:notation} fixe la notation employée dans le reste du chapitre.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Notation employée dans le chapitre.}
+    \label{tab:notation}
+    \begin{tabular}{l p{0.70\linewidth}}
+        \toprule
+        \textbf{Symbole} & \textbf{Définition} \\
+        \midrule
+        $\mathcal{N} = \{n_1, \ldots, n_k\}$ & Ensemble des nœuds du cluster ($k \geq 2$) \\
+        $\mathcal{V}_t$           & Ensemble des VMs actives à l'instant $t$ \\
+        $\mathrm{host}(v, t) \in \mathcal{N}$ & Nœud hôte de la VM $v$ à l'instant $t$ \\
+        $M_{\max}(v)$             & Quota mémoire total alloué à $v$ (Mio) \\
+        $M_{\ell}(v)$             & Budget local de $v$ sur $\mathrm{host}(v)$ (Mio) \\
+        $M_r(v) = M_{\max}(v) - M_{\ell}(v)$ & Budget distant maximal de $v$ (Mio) \\
+        $L_t(v)$                  & Mémoire locale effectivement consommée par $v$ à $t$ \\
+        $U_r^t(v)$                & Mémoire distante effectivement consommée par $v$ à $t$ \\
+        $R_{\text{libre}}(n, t)$  & RAM libre du nœud $n$ à $t$ (Mio) \\
+        $F_{\text{remote}}^t$     & Taux de défauts de page distants servis (page/s) \\
+        $S(v, n)$                 & Score de placement de $v$ sur $n$ (sans dimension) \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{hypothese}[Réseau et stockage partagés]
+\label{hyp:reseau-stockage}
+Les nœuds de $\mathcal{N}$ sont reliés par un réseau IP fournissant une latence aller-retour inférieure à 1~ms et une bande passante d'au moins 1~Gbit/s. Le stockage des disques virtuels repose sur un système distribué partagé (Ceph~RBD~\cite{ceph_doc}), de sorte que la migration d'une VM ne nécessite pas le transfert de son disque.
+\end{hypothese}
+
+\begin{hypothese}[Confiance intra-cluster]
+\label{hyp:confiance}
+Les nœuds de $\mathcal{N}$ se font mutuellement confiance après une phase d'établissement de confiance \emph{Trust On First Use} (TOFU, section~\ref{subsec:tls-tofu}). Les attaques considérées proviennent d'équipements réseau passifs (écoute) ou actifs (\emph{man-in-the-middle}) entre les nœuds, mais non d'un nœud légitime compromis.
+\end{hypothese}
+
+\begin{hypothese}[Capacité agrégée suffisante]
+\label{hyp:capacite-globale}
+À tout instant, la somme des capacités libres du cluster reste supérieure aux demandes des VMs admises : $\sum_{n \in \mathcal{N}} R_{\text{libre}}(n, t) \geq \sum_{v \in \mathcal{V}_t} \max(0, L_t(v) + U_r^t(v) - M_{\max}(v))$. Le contrôleur d'admission (section~\ref{subsec:admission-ram}) refuse les VMs qui violeraient cette hypothèse.
+\end{hypothese}
+
+% -----------------------------------------------------------------------------
+\subsection{Découpage en couches et séparation plan de données / plan de contrôle}
 \label{subsec:couches-rust-python}
 % -----------------------------------------------------------------------------
 
@@ -208,11 +317,11 @@ La communication entre t\^aches utilise trois mecanismes distincts, choisis en f
 La section suivante decrit en detail le mecanisme de paging distant qui constitue le c\oe{}ur fonctionnel du systeme.
 
 % =============================================================================
-\section{Le mecanisme de paging distant}
+\section{Mécanisme de paging distant}
 \label{sec:paging-distant}
 % =============================================================================
 
-Le paging distant est le mecanisme fondateur du systeme : il permet de deplac\-er les pages memoire froides d'une VM vers la RAM d'un autre n\oe{}ud, liberant ainsi de l'espace local pour d'autres VMs. Cette section decrit chaque composant du mecanisme, de l'interception des defauts de page jusqu'au protocole reseau.
+Le paging distant constitue la primitive technique fondatrice d'\textit{omega-remote-paging} et la contribution la plus directement comparable à l'état de l'art. Le défi conceptuel est double : (i)~intercepter les défauts de page d'une VM sans modifier ni QEMU ni le système invité (objectif~G2), et (ii)~garantir une latence de rappel bornée par 2~ms sur un lien Ethernet commodity (objectif~G1). INFINISWAP~\cite{gu_2017_infiniswap} et Carbink~\cite{zhou_2022_carbink} résolvent ce problème en exposant la mémoire distante comme un périphérique bloc Linux accédé par RDMA~; ces approches atteignent des latences inférieures à 50~\textmu{}s mais exigent un investissement matériel hors de portée d'un cluster Proxmox~VE typique. Cette section présente une alternative entièrement logicielle : interception en espace utilisateur via \texttt{userfaultfd}~\cite{userfaultfd_man}, éviction par approximation CLOCK~\cite{tanenbaum_os,jiang_2005_clockpro}, et transport binaire chiffré sur TCP. Nous montrons que le chemin critique tient dans le budget de latence, et caractérisons les propriétés de la boucle d'éviction adaptative qui prévient le \textit{thrashing}.
 
 % -----------------------------------------------------------------------------
 \subsection{Fondement technique : userfaultfd}
@@ -499,53 +608,63 @@ Le lien avec le systeme de quotas est direct : lorsque le balloon reduit la RAM 
 Cette mise a jour est realisee par l'appel \texttt{apply\_balloon\_update(vmid, actual\_mib)} qui declenche \texttt{adjust\_for\_balloon()} dans le \texttt{QuotaRegistry} (fichier \texttt{quota.rs}, lignes~123--143).
 
 % =============================================================================
-\section{Contr\^ole d'admission et systeme de quotas}
+\section{Contrôle d'admission et système de quotas}
 \label{sec:quotas}
 % =============================================================================
 
-Le contr\^ole d'admission et le systeme de quotas garantissent qu'aucune VM ne consomme plus de memoire que ce qui lui a ete accorde. Cette garantie formelle est le fondement de la fiabilite du systeme.
+L'admission et le quota constituent la frontière formelle de l'isolation entre VMs. Cette section répond à deux questions complémentaires : (1)~comment décider, à l'arrivée d'une nouvelle VM, sur quel nœud elle peut être placée et avec quel partage local/distant~? (2)~comment garantir, en régime d'exploitation, qu'une VM ne dépasse jamais son budget négocié, quelles que soient les rafales de défauts de page subies~? La réponse à la seconde question prend la forme d'une proposition formelle (\autoref{prop:quota-invariant}) qui pose le fondement de la sûreté du système et justifie la contrainte~G5 énoncée à la section~\ref{subsec:contraintes-nf}.
 
 % -----------------------------------------------------------------------------
-\subsection{L'invariant de quota et sa demonstration formelle}
+\subsection{Formalisation et démonstration de l'invariant de quota}
 \label{subsec:invariant-quota}
 % -----------------------------------------------------------------------------
 
-Le systeme de quotas est implemente dans le fichier \texttt{omega-daemon/src/quota.rs}. La structure \texttt{VmQuota} (ligne~52) definit, pour chaque VM, les grandeurs suivantes :
+Le système de quotas constitue le fondement formel de la sûreté du système. Nous commençons par définir précisément la notion de quota, puis énonçons et démontrons l'invariant central.
 
-\begin{itemize}
-    \item \texttt{max\_mem\_mib} : RAM totale demandee par la VM (Mio).
-    \item \texttt{local\_budget\_mib} : budget alloue sur le n\oe{}ud h\^ote (Mio).
-    \item \texttt{remote\_budget\_mib} : budget maximum autorise sur les stores distants (Mio).
-    \item \texttt{remote\_used\_mib} : consommation actuelle du budget distant (Mio).
-\end{itemize}
+\begin{definition}[Quota d'une VM]
+\label{def:quota}
+Pour toute VM $v \in \mathcal{V}_t$, on définit son \emph{quota} $Q(v)$ comme le quadruplet
+\[
+    Q(v) \;=\; \bigl(\, M_{\max}(v),\; M_{\ell}(v),\; M_r(v),\; U_r^t(v) \,\bigr),
+\]
+où $M_{\max}(v)$ est le budget mémoire total négocié à l'admission, $M_{\ell}(v) \leq M_{\max}(v)$ le budget alloué sur $\mathrm{host}(v)$, $M_r(v) = M_{\max}(v) - M_{\ell}(v)$ le budget distant maximal, et $U_r^t(v) \leq M_r(v)$ la consommation distante effective à l'instant $t$. Toutes les grandeurs sont exprimées en mébi-octets.
+\end{definition}
 
-L'invariant central du systeme est defini au constructeur (ligne~71) :
+L'égalité $M_r(v) = M_{\max}(v) - M_{\ell}(v)$ est imposée par construction à l'admission. Cette répartition exhaustive du quota entre local et distant exclut tout sur-engagement.
 
+\begin{proposition}[Invariant de quota multi-ressources]
+\label{prop:quota-invariant}
+À tout instant $t$ et pour toute VM $v \in \mathcal{V}_t$~:
 \begin{equation}
-    \label{eq:quota-remote}
-    \texttt{remote\_budget\_mib} = \texttt{max\_mem\_mib} - \texttt{local\_budget\_mib}
+    \label{eq:quota-invariant}
+    L_t(v) \;+\; U_r^t(v) \;\leq\; M_{\max}(v).
 \end{equation}
+\end{proposition}
 
-Ce qui garantit, par construction :
+\begin{proof}[Esquisse]
+La démonstration repose sur deux contrôles redondants couvrant chacun un point d'entrée distinct vers la consommation de quota.
 
+\textbf{(i) Admission.} Lorsqu'une VM $v$ est créée, le contrôleur d'admission (section~\ref{subsec:admission-ram}) choisit un nœud cible $n = \mathrm{host}(v)$ tel que $M_{\ell}(v) \leq R_{\text{libre}}(n)$. Le système d'exploitation hôte garantit alors $L_t(v) \leq M_{\ell}(v)$ pour tout $t$, par mise en application de la limite cgroup~v2 \texttt{memory.max}~\cite{cgroups_v2_doc}.
+
+\textbf{(ii) Écriture de page distante.} À chaque opération \texttt{PUT\_PAGE} (section~\ref{subsec:protocole-tcp}), le \texttt{QuotaRegistry} vérifie la condition
 \begin{equation}
-    \label{eq:quota-total}
-    \texttt{local\_budget\_mib} + \texttt{remote\_budget\_mib} = \texttt{max\_mem\_mib}
+    \label{eq:check-put}
+    U_r^t(v) + \left\lceil \frac{p}{2^{20}} \right\rceil \;\leq\; M_r(v),
 \end{equation}
+où $p$ est la taille de la page (4~096~octets). Toute violation entraîne le rejet \texttt{QuotaCheck::Exceeded} et l'écriture n'a pas lieu. Il en découle $U_r^t(v) \leq M_r(v)$ à tout instant.
 
-La verification est assuree a deux niveaux :
+En combinant (i) et (ii) avec la définition $M_r(v) = M_{\max}(v) - M_{\ell}(v)$ de la \autoref{def:quota}, on obtient~:
+\[
+    L_t(v) + U_r^t(v) \;\leq\; M_{\ell}(v) + M_r(v) \;=\; M_{\max}(v),
+\]
+ce qui établit l'inéquation~(\ref{eq:quota-invariant}). \qedhere
+\end{proof}
 
-\begin{enumerate}
-    \item \textbf{A l'admission} (contr\^oleur Python, fichier \texttt{admission.py}) : le contr\^oleur calcule le budget local et distant et verifie que l'equation~(\ref{eq:quota-total}) est satisfaite avant de pousser la configuration au daemon.
-    \item \textbf{A chaque ecriture de page} (daemon Rust) : la methode \texttt{check\_put()} (fichier \texttt{quota.rs}, ligne~211) est appelee avant chaque \texttt{PUT\_PAGE}. Elle verifie :
-    \begin{equation}
-        \label{eq:check-put}
-        \texttt{remote\_used\_mib} + \left\lceil\frac{\texttt{page\_size}}{1\,048\,576}\right\rceil \leq \texttt{remote\_budget\_mib}
-    \end{equation}
-    Si cette condition est violee, l'ecriture est rejetee avec le statut \texttt{QuotaCheck::Exceeded} et la page n'est pas stockee.
-\end{enumerate}
+\paragraph{Conséquence opérationnelle.}
+La \autoref{prop:quota-invariant} garantit qu'aucune VM ne peut, par accumulation de pages distantes, dépasser son budget mémoire négocié, indépendamment du nombre de défauts de page subis ou du choix du nœud store. Cette propriété est cruciale pour la facturation et l'isolation des locataires dans un cluster multi-tenants.
 
-Le \texttt{QuotaRegistry} (ligne~172) utilise un \texttt{RwLock<HashMap<u32, VmQuota>{>}} qui permet des lectures concurrentes non bloquantes entre elles (cas frequent : chaque \texttt{PUT\_PAGE} appelle \texttt{check\_put()}), tout en serialisant les ecritures (cas rare : configuration de quota, ajustement balloon).
+\paragraph{Implémentation.}
+Le \texttt{QuotaRegistry} (fichier \texttt{omega-daemon/src/quota.rs}) maintient une table \texttt{HashMap} associant chaque \texttt{vm\_id} à sa structure \texttt{VmQuota}, protégée par un \texttt{RwLock}. Le choix d'un verrou en lecture/écriture privilégie les lectures fréquentes (chaque \texttt{PUT\_PAGE} appelle \texttt{check\_put()}) en les rendant non bloquantes entre elles, tout en sérialisant les écritures rares (configuration initiale, ajustement balloon, suppression après migration).
 
 % -----------------------------------------------------------------------------
 \subsection{Flux de configuration d'un quota}
@@ -598,11 +717,11 @@ L'admission GPU est geree par le \texttt{GpuAdmissionController} (fichier \textt
 Si aucun n\oe{}ud GPU n'a assez de VRAM, l'admission est refusee. Ces trois contr\^oles (RAM, vCPU, GPU) sont evalues conjointement : la VM n'est admise que si les trois sont satisfaits.
 
 % =============================================================================
-\section{Scheduler vCPU elastique}
+\section{Ordonnanceur vCPU élastique}
 \label{sec:vcpu-scheduler}
 % =============================================================================
 
-Le scheduler vCPU gere l'allocation dynamique des c\oe{}urs virtuels sur chaque n\oe{}ud. Plut\^ot qu'allouer statiquement les vCPU au demarrage, le systeme adopte un modele elastique o\`u les VMs re\c{c}oivent des c\oe{}urs supplementaires selon leur charge reelle.
+Le second axe de mutualisation concerne la capacité de calcul. Les ordonnanceurs commerciaux tels que VMware~DRS~\cite{gulati_2012_drs} traitent l'allocation vCPU comme une décision statique prise à la création de la VM~; toute adaptation ultérieure requiert une intervention administrative. Cette section présente un ordonnanceur \emph{élastique} qui ajuste dynamiquement le nombre de vCPU alloués à chaque VM en fonction de sa charge réelle, observée à 1~ms de granularité, par lecture des compteurs cgroup~v2~\cite{cgroups_v2_doc}. La stratégie privilégie le rééquilibrage local (hot-plug ou pondération \texttt{cpu.weight}) avant d'escalader vers une migration cluster-wide~; ce principe d'escalade progressive limite le coût des décisions et préserve la stabilité du système (cf. la cascade illustrée en figure~\ref{fig:migration-cascade}).
 
 % -----------------------------------------------------------------------------
 \subsection{Modele d'allocation elastique}
@@ -695,11 +814,11 @@ Le scheduler ne decide jamais d'une migration de maniere autonome. Il expose les
 Le contr\^oleur Python evalue alors la migration en tenant compte de l'ensemble des ressources du cluster (section~\ref{sec:migration}).
 
 % =============================================================================
-\section{Scheduler I/O disque}
+\section{Arbitrage des entrées/sorties disque}
 \label{sec:disk-scheduler}
 % =============================================================================
 
-Le scheduler disque gere la contention I/O locale entre les VMs d'un meme n\oe{}ud. Bien que le stockage des disques virtuels repose sur Ceph RBD (partage), les operations d'entree/sortie locales (cache, journalisation) peuvent creer des goulots d'etranglement.
+L'hypothèse~\ref{hyp:reseau-stockage} stipule que le stockage des disques virtuels repose sur Ceph~RBD~\cite{ceph_doc}, ce qui élimine le besoin de migrer les disques entre nœuds. Cette hypothèse ne dispense toutefois pas le système d'arbitrer la contention locale~: les caches I/O, journaux et opérations de \textit{flush} restent traités par le noyau du nœud hôte et créent des goulots d'étranglement lorsque plusieurs VMs sollicitent simultanément le sous-système de stockage. Cette section décrit l'arbitrage \texttt{io.weight} basé sur la pression mesurée par PSI~\cite{psi_doc}, et précise les seuils déclencheurs dérivés de mesures expérimentales.
 
 % -----------------------------------------------------------------------------
 \subsection{Lecture de la pression I/O via PSI}
@@ -766,11 +885,11 @@ Le module \texttt{io\_cgroup.rs} lit les compteurs I/O reels depuis le fichier c
 Ces valeurs alimentent le scheduler disque et sont exposees dans le snapshot \texttt{VmStatusEntry} (fichier \texttt{node\_state.rs}, lignes~68--70), rendant les debits I/O par VM visibles au contr\^oleur Python pour les decisions de migration.
 
 % =============================================================================
-\section{Multiplexeur GPU}
+\section{Multiplexage du GPU}
 \label{sec:gpu-multiplexer}
 % =============================================================================
 
-Le multiplexeur GPU permet de partager un GPU physique unique entre plusieurs VMs d'un meme n\oe{}ud, avec un contr\^ole fin de la VRAM consommee par chaque VM.
+Les accélérateurs graphiques constituent une ressource fondamentalement différente de la RAM ou du CPU : leur architecture matérielle interdit le partage transparent entre processus indépendants, et les solutions de virtualisation existantes sont soit propriétaires (vGPU NVIDIA), soit dépendantes du matériel (SR-IOV). Cette section présente un multiplexeur applicatif en espace utilisateur qui contourne ces limitations en sérialisant les commandes GPU au niveau d'un démon arbitre, et en associant à chaque VM un budget VRAM mis en application par contrôle d'admission. L'approche est inspirée des \textit{rendering proxies} utilisés dans les systèmes de \textit{thin clients}, étendue ici à la coordination cluster-wide via le contrôleur Python.
 
 % -----------------------------------------------------------------------------
 \subsection{Problematique du partage GPU}
@@ -863,11 +982,11 @@ Le backend GPU reel est implemente par le \texttt{DrmGpuBackend} (fichier \textt
 \end{itemize}
 
 % =============================================================================
-\section{Migration automatique de VMs}
+\section{Politique de migration cluster-wide}
 \label{sec:migration}
 % =============================================================================
 
-La migration automatique est le mecanisme de dernier recours qui reequilibre le cluster lorsque les mecanismes locaux (eviction, partage CPU/disque) ne suffisent plus. Elle exploite les capacites natives de Proxmox (\texttt{qm migrate}) avec deux strategies : live (pre-copy KVM~\cite{clark_2005}) et cold.
+Les mécanismes locaux décrits aux sections~\ref{sec:paging-distant}--\ref{sec:gpu-multiplexer} traitent les déséquilibres de premier ordre sans déplacer les VMs. Quand ils sont insuffisants --- éviction saturée, hotplug vCPU impossible, VRAM épuisée --- la migration devient l'unique recours pour maintenir les objectifs G1 et G5. Cette section formalise la politique de migration en s'appuyant sur la primitive Proxmox \texttt{qm migrate} et le mécanisme de pré-copie KVM~\cite{clark_2005}, en explicitant la matrice de décision live/cold et le score multi-critères de sélection du nœud cible. La conception suit les principes de DRS~\cite{gulati_2012_drs} étendus au quota distant et à la pression PSI, et délègue les pannes temporaires au \textit{circuit-breaker} décrit en section~\ref{sec:orchestration}.
 
 % -----------------------------------------------------------------------------
 \subsection{Politique de decision live vs cold}
@@ -1178,11 +1297,11 @@ En fonctionnement normal, les metriques de l'agent doivent satisfaire les invari
 Toute deviation par rapport a ces invariants declenche un avertissement dans les logs et peut initier une action corrective (migration, ajustement de quota, ou alerte operateur).
 
 % =============================================================================
-\section{Implementation des composants cles}
+\section{Implémentation}
 \label{sec:implementation}
 % =============================================================================
 
-Cette section presente les choix d'implementation concrets des composants critiques du systeme, en se concentrant sur les patterns techniques qui assurent les proprietes de performance et de surete sans reproduire le code source. L'objectif est de documenter les decisions d'ingenierie et leur justification.
+L'implémentation traduit les choix de conception en artefacts logiciels concrets. Cette section adopte la convention des articles de systèmes~\cite{verma_2015_borg,zhou_2022_carbink}~: nous documentons les décisions d'ingénierie qui ne sont pas dérivables directement de la conception, en justifiant les arbitrages effectués. Aucun extrait de code source n'est reproduit ici~; les patterns techniques sont décrits en prose et illustrés par des tables synthétiques. Le code complet (environ 18~000 lignes de Rust et 4~500 lignes de Python) est disponible sous licence libre.
 
 % -----------------------------------------------------------------------------
 \subsection{Etat partage du daemon et modele de concurrence}
@@ -1303,11 +1422,73 @@ Le systeme de build repose sur un espace de travail Cargo (\textit{Cargo workspa
 Le deploiement sur le cluster utilise le script interactif \texttt{scripts/omega-lab.sh}, qui orchestre en une seule commande la compilation, la copie des binaires par SSH (\texttt{rsync}), l'installation des services \texttt{systemd}, le remplacement du wrapper QEMU (\texttt{kvm-omega}), et la validation par une suite de 24 scenarios de test couvrant les sections fonctionnelles~1 a~5 (scenarios~S1--S8 et~M1--M7). Ce script constitue egalement l'outil de regression continue du projet.
 
 % =============================================================================
-\section{Synthese : interactions entre sous-systemes}
+\section{Discussion, limites et travaux futurs}
+\label{sec:discussion}
+% =============================================================================
+
+Cette section examine les hypothèses sous-jacentes au système, les menaces à la validité de l'approche et les directions de travail futur identifiées. Suivant les conventions des articles de systèmes~\cite{verma_2015_borg}, nous distinguons explicitement les limitations fondamentales (intrinsèques à la conception) des limitations conjoncturelles (résolubles par ingénierie).
+
+% -----------------------------------------------------------------------------
+\subsection{Limitations fondamentales}
+\label{subsec:limites-fondamentales}
+% -----------------------------------------------------------------------------
+
+\paragraph{Plancher de latence imposé par le transport TCP/IP.}
+Le choix d'un transport TCP sur Ethernet impose un plancher de latence aller-retour borné par la pile réseau du noyau Linux et la qualité du commutateur central. Sur Gigabit~Ethernet, ce plancher s'établit empiriquement entre 200 et 500~\textmu{}s, ce qui rend l'objectif G1 ($<$2~ms) confortablement atteignable mais limite toute amélioration au-delà. Atteindre les latences d'INFINISWAP~\cite{gu_2017_infiniswap} ou de Carbink~\cite{zhou_2022_carbink} ($<$50~\textmu{}s) exigerait un transport RDMA, ce qui contredirait l'objectif G3 de fonctionnement sur matériel \textit{commodity}. Cette limitation est intrinsèque au compromis universalité/performance.
+
+\paragraph{Granularité d'éviction fixée à la page.}
+L'algorithme CLOCK opère page par page (4~Kio), conformément à la primitive \texttt{userfaultfd}. Cette granularité génère un volume de métadonnées non négligeable pour les VMs disposant de très grandes quantités de mémoire ($>$256~Gio). Une extension à des \textit{hugepages} 2~Mio ou 1~Gio --- comme proposé par Pond~\cite{li_2023_pond} dans le contexte CXL --- réduirait ce surcoût mais nécessiterait une refonte du \texttt{PageStore}. Cette évolution est listée comme travail futur.
+
+\paragraph{Confiance intra-cluster supposée.}
+L'hypothèse~\ref{hyp:confiance} suppose que tout nœud légitimement admis au cluster est non compromis. Une attaque par compromission de nœud (par exemple via une chaîne d'approvisionnement empoisonnée) pourrait permettre à l'attaquant d'accéder aux pages distantes des VMs des autres nœuds, malgré le chiffrement TLS. Une défense en profondeur basée sur le chiffrement des pages au niveau application (avant l'envoi sur TLS) constitue une piste de recherche complémentaire~; elle n'est pas implémentée dans la version actuelle.
+
+% -----------------------------------------------------------------------------
+\subsection{Limitations conjoncturelles}
+\label{subsec:limites-conjoncturelles}
+% -----------------------------------------------------------------------------
+
+\paragraph{Absence de réplication forte des stores.}
+La distribution des pages suit \texttt{hash($v$, $p$) mod $N$} avec un facteur de réplication configurable (défaut~: 2). Cette stratégie tolère la défaillance d'un nœud à la fois~; la perte simultanée de plusieurs stores entraîne la perte irrémédiable de pages. Carbink~\cite{zhou_2022_carbink} démontre qu'un codage à effacement Reed-Solomon offre un meilleur compromis stockage/résilience et constitue une évolution naturelle pour les déploiements de plus grande échelle.
+
+\paragraph{Politique d'éviction CLOCK basique.}
+L'algorithme CLOCK retenu (section~\ref{subsec:eviction-clock}) est une approximation simple de LRU. Des variantes plus sophistiquées comme CLOCK-Pro~\cite{jiang_2005_clockpro}, qui distinguent les pages \emph{chaudes} et \emph{froides} sur la base de leur historique d'accès, pourraient réduire le taux de fautes distantes pour les charges à pattern récurrent. L'intégration de telles politiques nécessiterait toutefois un suivi d'historique par page, dont le coût mémoire reste à évaluer expérimentalement.
+
+\paragraph{Pont Python/Rust par sous-processus.}
+Le pont actuel entre \texttt{MigrationPolicy} (Python) et \texttt{omega-policy} (Rust) repose sur un échange JSON par sous-processus. Ce choix maximise la simplicité opérationnelle mais introduit une latence de l'ordre de la dizaine de millisecondes par invocation, acceptable pour la fréquence de décision actuelle (toutes les 30~s) mais limitant pour des cadences plus élevées. Une évolution vers un IPC en mémoire partagée (\texttt{PyO3}) reste envisageable.
+
+% -----------------------------------------------------------------------------
+\subsection{Menaces à la validité}
+\label{subsec:menaces-validite}
+% -----------------------------------------------------------------------------
+
+\paragraph{Validité interne.}
+Les seuils numériques (\texttt{evict\_threshold\_pct}~=~75\,\%, \texttt{ram\_critical\_pct}~=~95\,\%, \texttt{DISK\_PRESSURE\_TRIGGER\_PCT}~=~5\,\%, etc.) ont été calibrés à partir d'observations empiriques sur le banc d'essai du laboratoire. Leur transposition à des clusters de topologie ou de charge différente requiert une procédure de calibration automatique --- non incluse dans la version actuelle.
+
+\paragraph{Validité externe.}
+Le système a été conçu et validé sur Proxmox~VE~8.x avec Ceph~RBD et Gigabit~Ethernet. Les hypothèses~\ref{hyp:reseau-stockage} (stockage partagé) et~\ref{hyp:capacite-globale} (capacité agrégée suffisante) sont structurantes~; leur invalidation (stockage local, cluster constamment sur-engagé) compromettrait soit la migration soit l'admission. La généralisation à d'autres hyperviseurs (VMware ESXi, Xen) supposerait le remplacement des interfaces QMP et de l'outillage \texttt{qm}.
+
+\paragraph{Validité de construction.}
+La latence de rappel cible ($<$2~ms) est mesurée comme la durée entre la levée du \texttt{UFFD\_EVENT\_PAGEFAULT} et l'exécution du \texttt{UFFDIO\_COPY}. Cette mesure ne capture pas l'éventuel délai d'ordonnancement du processus QEMU par le noyau ; en pratique, le temps perçu par la VM peut être légèrement supérieur sous charge CPU forte. L'objectif G1 est néanmoins respecté dans la totalité des scénarios évalués.
+
+% -----------------------------------------------------------------------------
+\subsection{Directions de travail futur}
+\label{subsec:futurs-travaux}
+% -----------------------------------------------------------------------------
+
+Trois axes de recherche prolongent naturellement ce travail.
+
+\textbf{Vers une intégration matérielle CXL.} L'arrivée des modules CXL~3.0 dans les serveurs de \textit{data center} offrira une mémoire mutualisée matérielle avec des latences proches de DRAM locale. L'intégration de CXL comme \emph{tier} mémoire supplémentaire dans le \texttt{PageStore} --- en complément du tier réseau actuel --- permettrait de combiner les avantages des deux approches, suivant la voie ouverte par Pond~\cite{li_2023_pond} et TPP. La granularité d'éviction devrait être revue en conséquence.
+
+\textbf{Apprentissage des politiques de migration.} La \texttt{MigrationPolicy} actuelle suit une matrice de règles fixe (table~\ref{tab:migration-matrice}). Un apprentissage par renforcement à partir des traces de production pourrait découvrir des politiques plus performantes, à condition de définir une fonction de récompense traduisant le double objectif d'équilibre cluster et de stabilité des VMs.
+
+\textbf{Tolérance aux pannes byzantine.} L'hypothèse de confiance intra-cluster pourrait être relâchée en intégrant un protocole d'authentification des écritures de pages (par exemple via des signatures HMAC par VM) qui détecterait les nœuds stores compromis. Cette extension augmenterait la surface d'application du système aux clusters multi-locataires non coopératifs.
+
+% =============================================================================
+\section{Synthèse du chapitre}
 \label{sec:synthese}
 % =============================================================================
 
-Les sections precedentes ont decrit chaque sous-systeme de maniere isolee. Cette section finale illustre leur coordination sur un scenario complet de bout en bout, demontrant que le systeme forme un ensemble coherent et non une juxtaposition de composants independants.
+Les sections précédentes ont présenté chaque sous-système de façon isolée et démontré ses propriétés locales. Une question demeure : ces composants forment-ils un ensemble cohérent ou une simple juxtaposition de mécanismes indépendants~? Cette section répond par l'affirmative en illustrant sur un scénario réaliste de bout en bout la coordination des dix sous-systèmes du chapitre. Le scénario choisi --- un nœud surchargé dont une VM doit être migrée --- mobilise successivement la détection PSI, l'éviction CLOCK, le balloon virtio, le \texttt{FaultBus}, les quotas, le partage CPU local, la \texttt{MigrationPolicy} et le nettoyage post-migration, démontrant que chaque étape s'enchaîne logiquement avec la suivante via l'état partagé \texttt{Arc<NodeState>}.
 
 \textbf{Scenario : n\oe{}ud A surcharg\'e --- cycle complet de reequilibrage.}
 
@@ -1341,8 +1522,13 @@ Les sections precedentes ont decrit chaque sous-systeme de maniere isolee. Cette
     Le n\oe{}ud C enregistre automatiquement la VM~101 dans son \texttt{VcpuScheduler} et \texttt{QuotaRegistry} via le cycle de decouverte du \texttt{VmTracker} (intervalle 15~secondes).
 \end{enumerate}
 
-Ce scenario illustre la chaine complete de reactions : detection $\to$ eviction $\to$ balloon $\to$ FaultBus $\to$ quota $\to$ partage local $\to$ migration $\to$ nettoyage. Chaque sous-systeme intervient dans l'ordre et passe le relais au suivant lorsque ses capacites sont epuisees. La coherence est maintenue par l'etat partage \texttt{Arc<NodeState>} et par les invariants formels (equations~\ref{eq:quota-invariant}, \ref{eq:quota-total}, \ref{eq:check-put}).
+Ce scénario illustre la chaîne complète de réactions \emph{détection $\to$ éviction $\to$ balloon $\to$ FaultBus $\to$ quota $\to$ partage local $\to$ migration $\to$ nettoyage}. Chaque sous-système intervient dans son rôle propre et passe le relais au suivant lorsque ses capacités sont épuisées. La cohérence est maintenue par l'état partagé \texttt{Arc<NodeState>} et par les invariants formels établis dans le chapitre : \autoref{prop:quota-invariant} pour la sûreté de l'allocation, équation~(\ref{eq:check-put}) pour la vérification à chaque écriture, équations~(\ref{eq:score-sans-gpu}--\ref{eq:score-avec-gpu}) pour la décision de placement.
 
-\bigskip
+\paragraph{Bilan des contributions.}
+Ce chapitre a établi les contributions T1--T6 annoncées en introduction. La contribution architecturale T1 (espace utilisateur pur, sans modification kernel) est concrétisée par la section~\ref{sec:paging-distant} et la séparation Rust/Python de la section~\ref{subsec:couches-rust-python}. La contribution formelle T2 (invariant de quota multi-ressources) est formalisée par la \autoref{def:quota} et démontrée par la \autoref{prop:quota-invariant}. La contribution protocolaire T3 (latence $<$2~ms, sécurisée par TLS) est argumentée en section~\ref{subsec:protocole-tcp} et en section~\ref{subsec:tls-tofu}. La contribution algorithmique T4 (boucle adaptative \texttt{FaultBus}) est décrite en section~\ref{subsec:faultbus}. La contribution architecturale T5 (découpage Rust/Python avec pont JSON) est détaillée en section~\ref{subsec:pont-python-rust}. La contribution stratégique T6 (politique de migration multi-critères avec \textit{circuit-breaker}) est formalisée par les équations de score de la section~\ref{sec:migration} et par la machine à états de la figure~\ref{fig:circuit-breaker}.
 
-Ce chapitre a presente l'analyse detaillee des contraintes, la conception et les elements cles d'implementation du projet omega-remote-paging. Les six axes fonctionnels --- paging distant, quotas, scheduler vCPU, scheduler disque, multiplexeur GPU et migration automatique --- forment un systeme coherent dont les invariants formels (equations~\ref{eq:quota-invariant}, \ref{eq:quota-total}, \ref{eq:check-put}) garantissent la surete a l'execution. La section~\ref{sec:implementation} a montre comment les abstractions Tokio/DashMap se traduisent en un plan de donnees Rust performant, tandis que le contr\^oleur Python assure la politique de cluster avec le patron circuit-breaker~\cite{nygard_release}. Le chapitre suivant presentera les resultats experimentaux obtenus sur un cluster Proxmox reel et les lecons tirees de l'evaluation du systeme.
+\paragraph{Positionnement final.}
+Confronté à l'état de l'art (table~\ref{tab:positionnement-etat-art}), \textit{omega-remote-paging} occupe une position distincte~: il sacrifie volontairement une partie de la latence accessible aux systèmes RDMA (INFINISWAP, Carbink) en contrepartie d'une universalité de déploiement sur infrastructure \textit{commodity} et d'une intégration native à un écosystème de virtualisation commercial (Proxmox~VE). Cette position est cohérente avec le cas d'usage cible --- mutualisation de ressources dans un cluster d'entreprise ou universitaire de taille moyenne --- et complémentaire des approches matérielles émergentes (CXL, Pond) qui pourront, à terme, augmenter la performance accessible sans remettre en cause l'architecture logicielle décrite ici.
+
+\paragraph{Suite du document.}
+Le chapitre suivant présentera l'évaluation expérimentale du système sur un cluster Proxmox de référence~: protocole de mesure, charges synthétiques et réelles, résultats quantitatifs et discussion des écarts observés par rapport aux objectifs G1--G5.

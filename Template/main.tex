@@ -20,6 +20,18 @@
 \usepackage{datetime2}
 \usepackage{tikz}
 \usetikzlibrary{positioning, shapes.geometric, arrows.meta, automata, calc, fit}
+\usepackage{amsthm}
+\usepackage{amssymb}
+
+% ─── Environnements de type article scientifique ─────────────────────────────
+\theoremstyle{definition}
+\newtheorem{definition}{Définition}[chapter]
+\newtheorem{hypothese}[definition]{Hypothèse}
+
+\theoremstyle{plain}
+\newtheorem{proposition}[definition]{Proposition}
+\newtheorem{lemme}[definition]{Lemme}
+\newtheorem{theoreme}[definition]{Théorème}
 
 % =============================================================================
 % MÉTADONNÉES — À modifier pour votre projet

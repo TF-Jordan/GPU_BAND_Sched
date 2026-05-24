@@ -191,3 +191,99 @@
     url    = {https://lz4.github.io/lz4/},
     note   = {Algorithme de compression utilisé optionnellement pour le transport de pages (flag bit~0)},
 }
+
+% ── Désagrégation mémoire et far memory ───────────────────────────────────────
+
+@InProceedings{gu_2017_infiniswap,
+    author    = {Gu, Juncheng and Lee, Youngmoon and Zhang, Yiwen and Chowdhury, Mosharaf and Shin, Kang G.},
+    title     = {Efficient Memory Disaggregation with {INFINISWAP}},
+    booktitle = {Proceedings of the 14th USENIX Symposium on Networked Systems Design and Implementation (NSDI~17)},
+    year      = {2017},
+    pages     = {649--667},
+    address   = {Boston, MA, USA},
+    note      = {Paging distant sur RDMA via un pilote bloc Linux ; comparaison directe pour la latence et le surcoût réseau},
+}
+
+@InProceedings{shan_2018_legoos,
+    author    = {Shan, Yizhou and Huang, Yutong and Chen, Yilun and Zhang, Yiying},
+    title     = {{LegoOS}: A Disseminated, Distributed {OS} for Hardware Resource Disaggregation},
+    booktitle = {Proceedings of the 13th USENIX Symposium on Operating Systems Design and Implementation (OSDI~18)},
+    year      = {2018},
+    pages     = {69--87},
+    address   = {Carlsbad, CA, USA},
+    note      = {OS distribué pour la désagrégation matérielle ; oppose un modèle « OS-natif » au modèle « espace utilisateur » de ce travail},
+}
+
+@InProceedings{zhou_2022_carbink,
+    author    = {Zhou, Yang and Wassel, Hassan M. G. and Liu, Sihang and Gao, Jiaqi and Mickens, James and Yu, Minlan and Kennelly, Chris and Turner, Paul and Culler, David E. and Levy, Henry M. and Vahdat, Amin},
+    title     = {Carbink: Fault-Tolerant Far Memory},
+    booktitle = {Proceedings of the 16th USENIX Symposium on Operating Systems Design and Implementation (OSDI~22)},
+    year      = {2022},
+    pages     = {291--305},
+    address   = {Carlsbad, CA, USA},
+    note      = {Far memory tolérante aux pannes via codage à effacement ; éclaire la stratégie de réplication d'omega-remote-paging},
+}
+
+@InProceedings{aguilera_2017_remote_memory,
+    author    = {Aguilera, Marcos K. and Amit, Nadav and Calciu, Irina and Deguillard, Xavier and Gandhi, Jayneel and Subrahmanyam, Pratap and Suresh, Lalith and Tati, Kiran and Venkatasubramanian, Rajesh and Wei, Michael},
+    title     = {Remote Memory in the Age of Fast Networks},
+    booktitle = {Proceedings of the 2017 Symposium on Cloud Computing (SoCC~17)},
+    year      = {2017},
+    pages     = {121--127},
+    address   = {Santa Clara, CA, USA},
+    note      = {Étude fondatrice de la viabilité du paging distant sur réseaux haute performance},
+}
+
+@InProceedings{li_2023_pond,
+    author    = {Li, Huaicheng and Berger, Daniel S. and Hsu, Lisa and Ernst, Daniel and Zardoshti, Pantea and Novakovic, Stanko and Shah, Monish and Rajadnya, Samir and Lee, Scott and Agarwal, Ishwar and Hill, Mark D. and Fontoura, Marcus and Bianchini, Ricardo},
+    title     = {Pond: {CXL}-Based Memory Pooling Systems for Cloud Platforms},
+    booktitle = {Proceedings of the 28th ACM International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS~23)},
+    year      = {2023},
+    pages     = {574--587},
+    note      = {Mutualisation mémoire matérielle via CXL ; direction matérielle complémentaire à l'approche logicielle de ce travail},
+}
+
+% ── Ordonnancement multi-critères et gestion de ressources cluster ────────────
+
+@Article{gulati_2012_drs,
+    author  = {Gulati, Ajay and Holler, Anne and Ji, Minwen and Shanmuganathan, Ganesha and Waldspurger, Carl A. and Zhu, Xiaoyun},
+    title   = {{VMware} Distributed Resource Management: Design, Implementation, and Lessons Learned},
+    journal = {VMware Technical Journal},
+    volume  = {1},
+    number  = {1},
+    year    = {2012},
+    pages   = {45--64},
+    note    = {Ordonnanceur multi-critères propriétaire dont les principes d'admission inspirent la \texttt{MigrationPolicy}},
+}
+
+@InProceedings{verma_2015_borg,
+    author    = {Verma, Abhishek and Pedrosa, Luis and Korupolu, Madhukar R. and Oppenheimer, David and Tune, Eric and Wilkes, John},
+    title     = {Large-scale cluster management at {Google} with {Borg}},
+    booktitle = {Proceedings of the 10th European Conference on Computer Systems (EuroSys~15)},
+    year      = {2015},
+    pages     = {18:1--18:17},
+    address   = {Bordeaux, France},
+    note      = {Orchestrateur de cluster à grande échelle ; modèle de référence pour les politiques d'admission distribuées},
+}
+
+% ── Algorithmes de remplacement de pages ──────────────────────────────────────
+
+@InProceedings{jiang_2005_clockpro,
+    author    = {Jiang, Song and Chen, Feng and Zhang, Xiaodong},
+    title     = {{CLOCK-Pro}: An Effective Improvement of the {CLOCK} Replacement},
+    booktitle = {Proceedings of the 2005 USENIX Annual Technical Conference},
+    year      = {2005},
+    pages     = {323--336},
+    address   = {Anaheim, CA, USA},
+    note      = {Variante de CLOCK avec distinction des pages chaudes/froides ; évolution possible pour l'\texttt{EvictionEngine}},
+}
+
+% ── Migration de processus en espace utilisateur ──────────────────────────────
+
+@Misc{criu_doc,
+    author = {{CRIU Project}},
+    title  = {{CRIU} --- Checkpoint/Restore In Userspace},
+    year   = {2024},
+    url    = {https://criu.org/},
+    note   = {Mécanisme alternatif de migration en espace utilisateur ; incompatible avec QEMU live},
+}
