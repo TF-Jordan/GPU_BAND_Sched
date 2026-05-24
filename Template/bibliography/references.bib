@@ -1,0 +1,193 @@
+
+% ─── Références — Chapitre 3 : Analyse, Conception et Implémentation ──────────
+
+% ── Plateformes de virtualisation ─────────────────────────────────────────────
+
+@Misc{proxmox_doc,
+    author = {{Proxmox Server Solutions GmbH}},
+    title  = {Proxmox {VE} Administration Guide},
+    year   = {2024},
+    url    = {https://pve.proxmox.com/pve-docs/pve-admin-guide.html},
+    note   = {Documentation officielle Proxmox VE 8.x},
+}
+
+@Misc{qemu_doc,
+    author = {{QEMU Project}},
+    title  = {{QEMU} --- the {FAST!} processor emulator},
+    year   = {2024},
+    url    = {https://www.qemu.org/docs/master/},
+    note   = {Documentation technique QEMU, incluant QMP et les device virtio},
+}
+
+@Misc{qemu_balloon,
+    author = {{QEMU Project}},
+    title  = {Virtio Balloon --- {QEMU} Documentation},
+    year   = {2024},
+    url    = {https://www.qemu.org/docs/master/interop/virtio-balloon.html},
+    note   = {Spécification du device virtio-balloon pour l'ajustement dynamique de RAM},
+}
+
+@Misc{kvm_doc,
+    author = {{Linux KVM Project}},
+    title  = {{KVM} --- Kernel-based Virtual Machine},
+    year   = {2024},
+    url    = {https://linux-kvm.org/page/Main_Page},
+    note   = {Documentation KVM : architecture, interfaces de contrôle et hotplug},
+}
+
+% ── Interfaces noyau Linux ────────────────────────────────────────────────────
+
+@Misc{userfaultfd_man,
+    author = {{The Linux Kernel Documentation}},
+    title  = {userfaultfd(2) --- Create a file descriptor for handling page faults in user space},
+    year   = {2023},
+    url    = {https://man7.org/linux/man-pages/man2/userfaultfd.2.html},
+    note   = {Linux man-pages 6.x},
+}
+
+@Misc{cgroups_v2_doc,
+    author = {{The Linux Kernel Documentation}},
+    title  = {Control Group v2},
+    year   = {2024},
+    url    = {https://docs.kernel.org/admin-guide/cgroup-v2.html},
+    note   = {Documentation noyau Linux, cgroups v2 : cpu, io, memory controllers},
+}
+
+@Misc{psi_doc,
+    author = {{The Linux Kernel Documentation}},
+    title  = {Pressure Stall Information ({PSI})},
+    year   = {2024},
+    url    = {https://docs.kernel.org/accounting/psi.html},
+    note   = {Documentation noyau Linux, monitoring de pression CPU/mémoire/IO},
+}
+
+@Misc{madvise_man,
+    author = {{The Linux Kernel Documentation}},
+    title  = {madvise(2) --- give advice about use of memory},
+    year   = {2023},
+    url    = {https://man7.org/linux/man-pages/man2/madvise.2.html},
+    note   = {Linux man-pages 6.x --- \texttt{MADV\_DONTNEED} utilisé pour libérer les pages évincées},
+}
+
+% ── Langages et écosystème ────────────────────────────────────────────────────
+
+@Misc{rust_lang,
+    author = {{The Rust Project}},
+    title  = {The Rust Programming Language},
+    year   = {2024},
+    url    = {https://doc.rust-lang.org/book/},
+    note   = {Documentation officielle du langage Rust},
+}
+
+@Misc{tokio_doc,
+    author = {{Tokio Contributors}},
+    title  = {Tokio --- An asynchronous runtime for the {Rust} programming language},
+    year   = {2024},
+    url    = {https://tokio.rs/},
+    note   = {Runtime asynchrone utilisé pour la gestion des connexions TCP et des tâches concurrentes du daemon},
+}
+
+@Misc{dashmap_crate,
+    author = {Blaauw, Mads},
+    title  = {{DashMap} --- Blazingly fast concurrent {HashMap} in {Rust}},
+    year   = {2024},
+    url    = {https://crates.io/crates/dashmap},
+    note   = {Crate Rust utilisée pour l'index de pages sans verrou global (\texttt{PageStore})},
+}
+
+@Misc{rustls_crate,
+    author = {{rustls Contributors}},
+    title  = {rustls --- a modern {TLS} library in {Rust}},
+    year   = {2024},
+    url    = {https://github.com/rustls/rustls},
+    note   = {Bibliothèque TLS~1.3 utilisée pour le chiffrement du canal TCP inter-nœuds},
+}
+
+% ── Stockage distribué ────────────────────────────────────────────────────────
+
+@Misc{ceph_doc,
+    author = {{Ceph Foundation}},
+    title  = {Ceph Documentation},
+    year   = {2024},
+    url    = {https://docs.ceph.com/},
+    note   = {Documentation officielle Ceph, incluant RADOS Block Device (RBD) utilisé pour les disques VM},
+}
+
+% ── Observabilité ─────────────────────────────────────────────────────────────
+
+@Misc{prometheus_doc,
+    author = {{The Prometheus Authors}},
+    title  = {Prometheus --- Monitoring system \& time series database},
+    year   = {2024},
+    url    = {https://prometheus.io/docs/introduction/overview/},
+    note   = {Système de métriques utilisé pour l'exposition des indicateurs du daemon},
+}
+
+% ── Ouvrages de référence ──────────────────────────────────────────────────────
+
+@Book{tanenbaum_os,
+    author    = {Tanenbaum, Andrew S. and Bos, Herbert},
+    title     = {Modern Operating Systems},
+    edition   = {4},
+    publisher = {Pearson},
+    year      = {2015},
+    isbn      = {978-0-13-359162-0},
+}
+
+@Book{nygard_release,
+    author    = {Nygard, Michael T.},
+    title     = {Release It! Design and Deploy Production-Ready Software},
+    edition   = {2},
+    publisher = {Pragmatic Bookshelf},
+    year      = {2018},
+    isbn      = {978-1-68050-239-8},
+    note      = {Présente le pattern circuit-breaker utilisé dans le \texttt{ResilientCollector}},
+}
+
+@Book{kleppmann_ddia,
+    author    = {Kleppmann, Martin},
+    title     = {Designing Data-Intensive Applications},
+    publisher = {O'Reilly Media},
+    year      = {2017},
+    isbn      = {978-1-491-90374-0},
+    note      = {Référence pour les invariants de cohérence et la distribution des données dans les systèmes distribués},
+}
+
+% ── Articles et communications scientifiques ──────────────────────────────────
+
+@InProceedings{waldspurger_2002,
+    author    = {Waldspurger, Carl A.},
+    title     = {Memory Resource Management in {VMware ESX} Server},
+    booktitle = {Proceedings of the 5th USENIX Symposium on Operating Systems Design and Implementation (OSDI)},
+    year      = {2002},
+    pages     = {181--194},
+    note      = {Présente le balloon driver de VMware, précurseur du balloon virtio utilisé dans ce projet},
+}
+
+@InProceedings{clark_2005,
+    author    = {Clark, Christopher and Fraser, Keir and Hand, Steven and Hansen, Jacob Gorm and Jul, Eric and Limpach, Christian and Pratt, Ian and Warfield, Andrew},
+    title     = {Live Migration of Virtual Machines},
+    booktitle = {Proceedings of the 2nd USENIX Symposium on Networked Systems Design and Implementation (NSDI)},
+    year      = {2005},
+    pages     = {273--286},
+    note      = {Article fondateur sur la migration live par pré-copie (pre-copy) de la RAM des VMs},
+}
+
+@InProceedings{hines_2009,
+    author    = {Hines, Michael R. and Deshpande, Umesh and Gopalan, Kartik},
+    title     = {Post-Copy Live Migration of Virtual Machines},
+    booktitle = {ACM SIGOPS Operating Systems Review},
+    volume    = {43},
+    number    = {3},
+    year      = {2009},
+    pages     = {14--26},
+    note      = {Alternative post-copy à la migration live pré-copie utilisée par KVM/Proxmox},
+}
+
+@Misc{lz4_compression,
+    author = {Collet, Yann},
+    title  = {{LZ4} --- Extremely Fast Compression Algorithm},
+    year   = {2024},
+    url    = {https://lz4.github.io/lz4/},
+    note   = {Algorithme de compression utilisé optionnellement pour le transport de pages (flag bit~0)},
+}
