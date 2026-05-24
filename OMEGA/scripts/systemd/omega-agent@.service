@@ -1,0 +1,63 @@
+# Service systemd template pour node-a-agent (un service par VM).
+# Le @ permet d'instancier un service par vmid.
+#
+# Installation :
+#   cp omega-agent@.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now omega-agent@100   # pour la VM 100
+#   systemctl enable --now omega-agent@101   # pour la VM 101
+#
+# Configuration via /etc/omega/agent-%i.env (un fichier par vmid).
+# %i est remplacé par le vmid à l'instanciation.
+#
+# Exemple /etc/omega/agent-100.env :
+#   AGENT_VM_ID=100
+#   AGENT_STORES=10.10.0.11:9100,10.10.0.12:9100,10.10.0.13:9100   # tous les autres nœuds
+#   AGENT_STATUS_ADDRS=10.10.0.11:9200,10.10.0.12:9200,10.10.0.13:9200
+#   AGENT_VM_REQUESTED_MIB=2048
+#   AGENT_REGION_MIB=2048
+#   AGENT_VM_VCPUS=2
+#   AGENT_CURRENT_NODE=pve
+#   AGENT_MODE=daemon
+#   AGENT_EVICTION_THRESHOLD_MIB=512
+#   AGENT_RECALL_THRESHOLD_MIB=1024
+#   AGENT_MIGRATION_ENABLED=true
+#   AGENT_COMPACTION_ENABLED=false
+#   AGENT_RECALL_PRIORITY=5
+#   AGENT_GPU_REQUIRED=false
+#   AGENT_GPU_PLACEMENT_INTERVAL_SECS=60
+#   AGENT_TLS_FINGERPRINTS=ab12cd34ef56...,ff00aa11bb22...   # vide = TCP clair
+#   RUST_LOG=info
+
+[Unit]
+Description=omega-remote-paging agent for VM %i
+Documentation=https://github.com/omega/omega-remote-paging
+After=network-online.target qemu-server.service
+Wants=network-online.target
+# Ne pas démarrer si la VM n'est pas lancée (hook Proxmox gère ça normalement)
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/node-a-agent
+EnvironmentFile=/etc/omega/agent-%i.env
+
+# Watchdog : redémarre si l'agent crashe (item 5)
+# Si l'agent crashe, le handler uffd disparaît et la VM freeze sur la prochaine
+# page fault. Le redémarrage rapide minimise la fenêtre de freeze.
+Restart=always
+RestartSec=2s
+
+TimeoutStartSec=15s
+TimeoutStopSec=30s
+
+# Droits minimaux — l'agent a besoin de /proc et de créer des fds uffd
+NoNewPrivileges=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=omega-agent-%i
+
+[Install]
+WantedBy=multi-user.target

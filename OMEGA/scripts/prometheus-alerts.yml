@@ -1,0 +1,133 @@
+groups:
+  - name: omega_remote_paging
+    interval: 60s
+    rules:
+
+      # ── Stores inaccessibles ─────────────────────────────────────────────────
+
+      - alert: OmegaStoreDown
+        expr: up{job="omega-store"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Store omega-remote-paging inaccessible ({{ $labels.instance }})"
+          description: |
+            Le store {{ $labels.instance }} ne répond plus depuis 2 minutes.
+            Les agents ne peuvent plus évincer de pages — risque d'OOM sur le nœud compute.
+            Action : vérifier `systemctl status omega-store` sur le nœud store.
+
+      - alert: OmegaStoreHighConnections
+        expr: omega_store_active_connections > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Trop de connexions actives sur {{ $labels.node_id }}"
+          description: |
+            {{ $labels.node_id }} a {{ $value }} connexions actives (seuil : 50).
+            Peut indiquer un problème de déconnexion/reconnexion d'agents.
+
+      # ── Pression mémoire ─────────────────────────────────────────────────────
+
+      - alert: OmegaEvictionRateZero
+        expr: rate(omega_pages_evicted_total[5m]) == 0 and omega_cpu_pressure_pct > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Éviction bloquée sous forte pression CPU ({{ $labels.node_id }})"
+          description: |
+            Aucune page évincée depuis 10 minutes alors que la pression CPU est > 80 %.
+            L'agent est peut-être bloqué ou le store est plein.
+            Vérifier : `journalctl -u omega-agent@<vmid>` et `omega_disk_available_mib`.
+
+      - alert: OmegaHighPageFaultRate
+        expr: rate(omega_page_faults_total[1m]) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taux élevé de page faults uffd ({{ $labels.node_id }})"
+          description: |
+            Plus de 1000 page faults/minute sur {{ $labels.node_id }} (vmid={{ $labels.vm_id }}).
+            La VM rappelle beaucoup de pages depuis les stores — latence applicative possible.
+            Envisager d'augmenter le recall_threshold ou la RAM locale allouée.
+
+      # ── Disque ───────────────────────────────────────────────────────────────
+
+      - alert: OmegaStoreDiskLow
+        expr: omega_disk_available_mib < 5120
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Espace disque critique sur le store {{ $labels.node_id }} (< 5 GiB)"
+          description: |
+            Le store {{ $labels.node_id }} n'a plus que {{ $value }} MiB disponibles.
+            Les pages ne pourront plus être persistées sur disque.
+            Action immédiate : libérer de l'espace ou activer Ceph.
+
+      - alert: OmegaStoreDiskWarning
+        expr: omega_disk_available_mib < 20480
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Espace disque faible sur le store {{ $labels.node_id }} (< 20 GiB)"
+          description: |
+            Le store {{ $labels.node_id }} n'a plus que {{ $value }} MiB disponibles.
+            Prévoir une extension de capacité ou activer Ceph.
+
+      # ── vCPU ─────────────────────────────────────────────────────────────────
+
+      - alert: OmegaVcpuAtMax
+        expr: omega_vcpu_current >= on(vm_id) omega_vcpu_max
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "VM {{ $labels.vm_id }} au maximum de vCPUs depuis 15 min"
+          description: |
+            La VM {{ $labels.vm_id }} utilise tous ses vCPUs disponibles en continu.
+            Envisager d'augmenter vcpu_max ou de migrer la VM vers un nœud moins chargé.
+
+      - alert: OmegaCpuPressureHigh
+        expr: omega_cpu_pressure_pct > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Forte pression CPU sur {{ $labels.node_id }} (> 90 %)"
+          description: |
+            Le nœud {{ $labels.node_id }} est sous forte pression CPU ({{ $value }}%).
+            Le scheduler vCPU va tenter de réduire les vCPUs des VMs.
+            Si la situation persiste, envisager une migration de VM.
+
+      # ── Réplication / orphelins ───────────────────────────────────────────────
+
+      - alert: OmegaOrphanPagesSurge
+        expr: rate(omega_pages_orphaned_deleted_total[10m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Suppression massive de pages orphelines sur {{ $labels.node_id }}"
+          description: |
+            Plus de 100 pages orphelines/10 min supprimées sur {{ $labels.node_id }}.
+            Peut indiquer des crashs d'agents fréquents ou des VMs détruites sans nettoyage.
+            Vérifier l'état des agents : `journalctl -u 'omega-agent@*'`.
+
+      # ── TLS ──────────────────────────────────────────────────────────────────
+
+      - alert: OmegaTlsHandshakeFailures
+        expr: rate(omega_tls_handshake_failures_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Échecs handshake TLS sur {{ $labels.node_id }}"
+          description: |
+            Plus de 5 handshakes TLS échoués/minute sur {{ $labels.node_id }}.
+            Peut indiquer un désalignement de certificats (empreinte non configurée côté agent)
+            ou une attaque MITM. Vérifier la configuration STORE_TLS_TRUSTED_FINGERPRINTS.

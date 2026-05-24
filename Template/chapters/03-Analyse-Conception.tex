@@ -1,0 +1,1037 @@
+% =============================================================================
+% Chapitre 3 — Analyse et Conception
+% Projet : Omega FusionCore Proxmox (omega-remote-paging)
+% =============================================================================
+
+\chapter{Analyse et Conception}
+\label{cp:analyse-conception}
+
+Ce chapitre presente l'analyse detaillee des contraintes du systeme et la conception de chaque sous-systeme du projet \textit{omega-remote-paging}. L'objectif est de justifier chaque choix architectural par rapport aux alternatives ecartees, en ancrant chaque decision dans les structures de donnees, les constantes et les invariants reels du code source. Le chapitre couvre successivement l'analyse du probleme (section~\ref{sec:analyse-probleme}), l'architecture generale (section~\ref{sec:architecture-generale}), puis chacun des six axes fonctionnels du systeme : paging distant, quotas, scheduler vCPU, scheduler disque, multiplexeur GPU et migration automatique. Il conclut par l'orchestration cluster et une synthese des interactions entre sous-systemes.
+
+% =============================================================================
+\section{Analyse du probleme et des contraintes}
+\label{sec:analyse-probleme}
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+\subsection{Limites du modele memoire natif de Proxmox VE}
+\label{subsec:limites-proxmox}
+% -----------------------------------------------------------------------------
+
+Proxmox VE est une plateforme de virtualisation open source fondee sur QEMU/KVM qui gere les machines virtuelles (VMs) de maniere independante sur chaque n\oe{}ud physique du cluster~\cite{proxmox_doc}. La RAM de chaque n\oe{}ud constitue un silo isole : lorsqu'un n\oe{}ud A utilise 90\,\% de sa memoire tandis que les n\oe{}uds B et C n'en consomment que 30\,\%, Proxmox refuse la creation de nouvelles VMs sur A --- meme si le cluster dispose collectivement de memoire disponible.
+
+Ce cloisonnement entraine trois inefficacites mesurables :
+
+\begin{enumerate}[label=(\roman*)]
+    \item \textbf{Sur-provisionnement statique.} Une VM configuree avec 8~Gio de RAM ne les utilise pas en permanence. En pratique, une partie significative de sa memoire est \og froide \fg{} : des pages rarement accedees qui occupent de la RAM physique sans etre utiles a court terme.
+    \item \textbf{Fragmentation inter-n\oe{}uds.} La somme des RAM disponibles sur les n\oe{}uds peut depasser le seuil de creation d'une VM, mais aucun n\oe{}ud individuel ne dispose de la capacite suffisante.
+    \item \textbf{Absence de repartition dynamique.} Les ressources CPU, GPU et disque sont egalement cloisonnees, sans mecanisme de reequilibrage automatique base sur la charge reelle des VMs.
+\end{enumerate}
+
+% -----------------------------------------------------------------------------
+\subsection{Identification des ressources a mutualiser}
+\label{subsec:ressources-mutualiser}
+% -----------------------------------------------------------------------------
+
+L'analyse du comportement reel des VMs sur un cluster Proxmox de trois n\oe{}uds identifie quatre categories de ressources dont la mutualisation apporte un gain mesurable :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Ressources physiques cibles de mutualisation et mecanismes noyau associes.}
+    \label{tab:ressources-cibles}
+    \begin{tabular}{p{0.15\linewidth} p{0.30\linewidth} p{0.40\linewidth}}
+        \toprule
+        \textbf{Ressource} & \textbf{Probleme} & \textbf{Interface noyau} \\
+        \midrule
+        RAM & Pages froides bloquees en RAM physique & \texttt{userfaultfd}, \texttt{madvise} \\
+        vCPU & VMs idle bloquant des c\oe{}urs physiques & cgroups v2 (\texttt{cpu.max}, \texttt{cpu.weight}), QMP hotplug \\
+        I/O disque & Contention locale entre VMs & cgroups v2 (\texttt{io.weight}, \texttt{io.stat}), PSI \\
+        GPU/VRAM & GPU physiquement non partageable nativement & DRM ioctl, socket Unix \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Il est essentiel de noter que le stockage des disques virtuels n'est \textit{pas} concerne par cette mutualisation. Le projet suppose l'utilisation de Ceph RBD comme backend de stockage partage entre les n\oe{}uds, ce qui implique que seule la RAM doit etre transferee lors d'une migration de VM.
+
+% -----------------------------------------------------------------------------
+\subsection{Contraintes non fonctionnelles retenues}
+\label{subsec:contraintes-nf}
+% -----------------------------------------------------------------------------
+
+L'analyse des exigences operationnelles conduit a cinq contraintes non fonctionnelles qui guident l'ensemble des choix de conception :
+
+\begin{enumerate}[label=\textbf{C\arabic*.}]
+    \item \textbf{Latence de rappel de page inferieure a 2~ms sur Gigabit Ethernet.} Cette contrainte impose l'utilisation d'un protocole TCP binaire a en-tete fixe de 20~octets plut\^ot qu'un format textuel (JSON, Protocol Buffers) qui introduirait un surcout de serialisation incompatible avec le budget de latence.
+    \item \textbf{Transparence totale pour les VMs.} L'hyperviseur QEMU/KVM n'est pas modifie. Les VMs ne savent pas que leur memoire peut resider partiellement sur un n\oe{}ud distant. Cette contrainte exclut les approches de para-virtualisation memoire.
+    \item \textbf{Fonctionnement en espace utilisateur pur.} Aucune modification du noyau Linux n'est necessaire. Toutes les operations passent par des interfaces noyau standard : \texttt{userfaultfd}~\cite{userfaultfd_man}, cgroups v2~\cite{cgroups_v2_doc}, QMP, \texttt{/proc/meminfo}.
+    \item \textbf{Resilience a la perte d'un n\oe{}ud.} Un n\oe{}ud inaccessible ne doit pas bloquer le reste du cluster. Les decisions de politique doivent pouvoir fonctionner avec des donnees en cache (TTL de 120~secondes dans le \texttt{ResilientCollector}, fichier \texttt{resilient\_collector.py}, ligne~67).
+    \item \textbf{Invariant formel de quota.} Pour toute VM $v$ et a tout instant :
+    \begin{equation}
+        \label{eq:quota-invariant}
+        \texttt{local\_pages}(v) + \texttt{remote\_pages}(v) \leq \texttt{max\_mem}(v)
+    \end{equation}
+    Cet invariant est garanti a la fois par le contr\^oleur Python a l'admission et par le daemon Rust a chaque ecriture de page.
+\end{enumerate}
+
+La section suivante presente l'architecture generale qui repond a ces contraintes.
+
+% =============================================================================
+\section{Architecture generale du systeme}
+\label{sec:architecture-generale}
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+\subsection{Decoupage en couches et choix de separation Rust/Python}
+\label{subsec:couches-rust-python}
+% -----------------------------------------------------------------------------
+
+Le systeme est decoupe en deux couches logicielles complementaires, chacune implementee dans le langage le plus adapte a son role :
+
+\begin{itemize}
+    \item \textbf{Plan de donnees (Rust + Tokio).} Les operations critiques en latence --- store TCP de pages, handlers userfaultfd, lectures cgroups a 1~ms, hotplug QMP --- sont implementees en Rust. Le modele de concurrence asynchrone de Tokio, combine a la garantie d'absence de data races a la compilation, permet de gerer des centaines de connexions simultanees sans verrou global~\cite{rust_lang}.
+    \item \textbf{Plan de contr\^ole (Python).} Les decisions de politique du cluster --- admission, placement topologique, migrations --- sont implementees en Python. La flexibilite du langage facilite l'integration avec l'API REST de Proxmox et permet des iterations rapides sur les algorithmes de placement.
+\end{itemize}
+
+Ce choix de separation est motive par une analyse des alternatives :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Comparaison des alternatives d'architecture mono-langage vs. bi-langage.}
+    \label{tab:choix-langage}
+    \begin{tabular}{p{0.20\linewidth} p{0.33\linewidth} p{0.33\linewidth}}
+        \toprule
+        \textbf{Approche} & \textbf{Avantage} & \textbf{Inconvenient} \\
+        \midrule
+        Tout Rust & Performances uniformes, un seul binaire & Integration Proxmox API complexe, iteration lente sur la politique \\
+        Tout Python & Prototypage rapide, ecosysteme riche & GIL serialise les lectures cgroups a 1~ms, latence imprevisible \\
+        Rust + Python (retenu) & Latence deterministe pour les donnees, flexibilite pour le contr\^ole & Complexite d'integration (bridge JSON via sous-processus) \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Le pont entre les deux couches est realise par le module \texttt{rust\_policy.py} (fichier \texttt{controller/controller/rust\_policy.py}), qui delegue les evaluations critiques au binaire Rust \texttt{omega-policy} via un sous-processus JSON. Si le binaire est absent, un fallback Python pur assure la continuite de fonctionnement.
+
+% -----------------------------------------------------------------------------
+\subsection{Topologie du cluster et r\^oles symetriques}
+\label{subsec:topologie-cluster}
+% -----------------------------------------------------------------------------
+
+Chaque n\oe{}ud du cluster execute le meme binaire \texttt{omega-daemon} et joue simultanement deux r\^oles :
+
+\begin{itemize}
+    \item \textbf{Compute} : il heberge des VMs QEMU/KVM dont les pages froides peuvent etre evincees vers les autres n\oe{}uds.
+    \item \textbf{Store} : il accepte et stocke en RAM les pages distantes envoyees par les VMs des autres n\oe{}uds.
+\end{itemize}
+
+L'architecture combine un modele peer-to-peer pour le canal de paging (port 9100) et un modele centralise pour les decisions de politique (contr\^oleur Python sur un seul n\oe{}ud). La figure~\ref{fig:architecture-cluster} illustre cette topologie.
+
+\begin{figure}[htbp]
+    \centering
+    \begin{tikzpicture}[
+        node_box/.style={draw, rounded corners, minimum width=3.2cm, minimum height=2cm, align=center, fill=blue!5},
+        controller_box/.style={draw, rounded corners, minimum width=10cm, minimum height=1.4cm, align=center, fill=green!8},
+        port_label/.style={font=\footnotesize\ttfamily, fill=white, inner sep=1pt},
+        >=stealth
+    ]
+        % Nodes
+        \node[node_box] (A) at (0, 0) {\textbf{N\oe{}ud A}\\omega-daemon\\VMs + Store};
+        \node[node_box] (B) at (5, 0) {\textbf{N\oe{}ud B}\\omega-daemon\\VMs + Store};
+        \node[node_box] (C) at (10, 0) {\textbf{N\oe{}ud C}\\omega-daemon\\VMs + Store};
+
+        % TCP links (peer-to-peer)
+        \draw[<->, thick, blue!60] (A.east) -- (B.west) node[port_label, midway, above] {:9100 TCP+TLS};
+        \draw[<->, thick, blue!60] (B.east) -- (C.west) node[port_label, midway, above] {:9100 TCP+TLS};
+        \draw[<->, thick, blue!60] (A.north east) to[bend left=25] node[port_label, midway, above] {:9100} (C.north west);
+
+        % Controller
+        \node[controller_box] (ctrl) at (5, -3) {\textbf{omega-controller} (Python)\\Admission $\cdot$ Migration $\cdot$ Placement};
+
+        % HTTP links (controller to nodes)
+        \draw[->, thick, red!60] (ctrl.north west) ++(0.5,0) -- ++(0, 1.3) -| (A.south) node[port_label, near start, right] {:9200/:9300 HTTP};
+        \draw[->, thick, red!60] (ctrl.north) -- (B.south) node[port_label, midway, right] {:9200/:9300};
+        \draw[->, thick, red!60] (ctrl.north east) ++(-0.5,0) -- ++(0, 1.3) -| (C.south) node[port_label, near start, left] {:9200/:9300};
+    \end{tikzpicture}
+    \caption{Topologie du cluster omega-remote-paging : paging peer-to-peer (TCP+TLS port~9100) et contr\^ole centralise (HTTP ports~9200/9300).}
+    \label{fig:architecture-cluster}
+\end{figure}
+
+Trois ports reseau distinct structurent les communications, comme le resume le tableau~\ref{tab:ports-reseau}.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Ports reseau du systeme et leurs r\^oles.}
+    \label{tab:ports-reseau}
+    \begin{tabular}{c c p{0.55\linewidth}}
+        \toprule
+        \textbf{Port} & \textbf{Protocole} & \textbf{R\^ole} \\
+        \midrule
+        9100 & TCP + TLS & Store inter-n\oe{}uds : protocole binaire (header 20~octets + payload 4~Kio) \\
+        9200 & HTTP JSON & API cluster : etat du n\oe{}ud expose au contr\^oleur \\
+        9300 & HTTP JSON & Canal de contr\^ole local : quotas, hotplug vCPU, metriques Prometheus \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------------
+\subsection{Composition interne du daemon (\texttt{Arc<NodeState>})}
+\label{subsec:composition-daemon}
+% -----------------------------------------------------------------------------
+
+Le daemon unifie \texttt{omega-daemon} lance huit t\^aches Tokio au demarrage (fichier \texttt{omega-daemon/src/main.rs}, lignes 57--448). Toutes ces t\^aches partagent un etat central de type \texttt{Arc<NodeState>} (fichier \texttt{omega-daemon/src/node\_state.rs}, ligne~94), qui contient les sous-systemes suivants sans verrou global :
+
+\begin{itemize}
+    \item \texttt{store: Arc<PageStore>} --- index \texttt{DashMap} shard\'e pour le stockage des pages distantes.
+    \item \texttt{quota\_registry: Arc<QuotaRegistry>} --- quotas RAM par VM, protege par \texttt{RwLock} (lectures non bloquantes entre elles).
+    \item \texttt{vcpu\_scheduler: Arc<VcpuScheduler>} --- allocation elastique des vCPU.
+    \item \texttt{disk\_io\_scheduler: Arc<DiskIoScheduler>} --- repartition des priorites I/O.
+    \item \texttt{gpu\_runtime: Option<Arc<GpuRuntime>>} --- multiplexeur GPU (optionnel).
+    \item \texttt{vm\_tracker: Arc<VmTracker>} --- detection des VMs QEMU locales.
+\end{itemize}
+
+La communication entre t\^aches utilise trois mecanismes distincts, choisis en fonction du pattern d'acces :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Mecanismes de synchronisation interne du daemon.}
+    \label{tab:sync-mecanismes}
+    \begin{tabular}{p{0.22\linewidth} p{0.25\linewidth} p{0.38\linewidth}}
+        \toprule
+        \textbf{Mecanisme} & \textbf{Utilise par} & \textbf{Justification} \\
+        \midrule
+        \texttt{DashMap} (sharded) & \texttt{PageStore} & Lectures/ecritures concurrentes de pages sans verrou global \\
+        \texttt{RwLock} & \texttt{QuotaRegistry}, \texttt{VcpuScheduler} & Lectures tres frequentes, ecritures rares \\
+        \texttt{tokio::mpsc} & \texttt{FaultBus} & Communication unidirectionnelle producteur/consommateur (handler uffd $\to$ eviction engine) \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+La section suivante decrit en detail le mecanisme de paging distant qui constitue le c\oe{}ur fonctionnel du systeme.
+
+% =============================================================================
+\section{Le mecanisme de paging distant}
+\label{sec:paging-distant}
+% =============================================================================
+
+Le paging distant est le mecanisme fondateur du systeme : il permet de deplac\-er les pages memoire froides d'une VM vers la RAM d'un autre n\oe{}ud, liberant ainsi de l'espace local pour d'autres VMs. Cette section decrit chaque composant du mecanisme, de l'interception des defauts de page jusqu'au protocole reseau.
+
+% -----------------------------------------------------------------------------
+\subsection{Fondement technique : userfaultfd}
+\label{subsec:userfaultfd}
+% -----------------------------------------------------------------------------
+
+L'interface \texttt{userfaultfd} (User Fault File Descriptor) est un mecanisme du noyau Linux introduit a partir de la version 4.3 qui permet a un programme en espace utilisateur d'intercepter et de resoudre les defauts de page~\cite{userfaultfd_man}. Contrairement au swap Linux classique, qui implique un fichier ou une partition sur disque et un code noyau non modifiable, \texttt{userfaultfd} offre un contr\^ole total depuis l'espace utilisateur.
+
+Le choix de \texttt{userfaultfd} plut\^ot que le swap Linux repose sur trois arguments :
+
+\begin{enumerate}
+    \item \textbf{Pas de disque.} Les pages froides sont envoyees vers la RAM d'un autre n\oe{}ud, pas sur un support de stockage persistant. Le swap Linux necessite obligatoirement un fichier ou une partition.
+    \item \textbf{Pas de modification du noyau.} L'interface \texttt{userfaultfd} est exposee via \texttt{ioctl()} standard (\texttt{UFFD\_API}, \texttt{UFFDIO\_REGISTER}, \texttt{UFFDIO\_COPY}). Aucun module noyau supplementaire n'est necessaire.
+    \item \textbf{Selectivite par VM.} Chaque VM possede son propre file descriptor \texttt{userfaultfd}, ce qui permet de traiter chaque VM independamment et de n'activer le paging distant que sur les VMs qui le necessitent.
+\end{enumerate}
+
+L'integration avec QEMU s'effectue via le launcher \texttt{omega-qemu-launcher}, qui injecte un backend memoire de type \texttt{memory-backend-file} base sur un \texttt{memfd} :
+
+\begin{verbatim}
+Proxmox -> /usr/bin/kvm -> kvm-omega -> omega-qemu-launcher exec-proxmox
+        -> node-a-agent memfd -> QEMU reel + omega-uffd-bridge.so
+\end{verbatim}
+
+Le bridge \texttt{omega-uffd-bridge.so} est charge par \texttt{LD\_PRELOAD} dans le processus QEMU reel. Il detecte le mapping \texttt{memfd:omega-vm-<vmid>}, cree le \texttt{userfaultfd}, puis transmet le file descriptor a l'agent via le socket \texttt{/var/lib/omega-qemu/vm-<vmid>/uffd.sock}.
+
+Le flux complet de resolution d'un defaut de page est illustre ci-dessous :
+
+\begin{verbatim}
+1. La VM accede a une adresse dont la page est distante
+2. Le noyau genere un page fault intercepte par userfaultfd
+3. omega-daemon recoit l'evenement via FaultBus
+4. GET_PAGE TCP (TLS) envoye au noeud qui stocke la page
+5. UFFDIO_COPY : la page (4 096 octets) est copiee en RAM locale
+6. La VM reprend son execution --- latence typique < 2 ms sur GbE
+\end{verbatim}
+
+% -----------------------------------------------------------------------------
+\subsection{Algorithme d'eviction CLOCK}
+\label{subsec:eviction-clock}
+% -----------------------------------------------------------------------------
+
+Lorsque la pression memoire du n\oe{}ud depasse un seuil configurable, le moteur d'eviction selectionne les pages les moins recemment utilisees pour les envoyer a un store distant. L'algorithme retenu est CLOCK (aussi appele \textit{second chance}), une approximation de LRU (Least Recently Used) a faible co\^ut, largement utilise dans les noyaux de systemes d'exploitation~\cite{tanenbaum_os}.
+
+Le moteur d'eviction est implemente dans le fichier \texttt{omega-daemon/src/eviction\_engine.rs}. Son cycle de fonctionnement est le suivant :
+
+\begin{enumerate}
+    \item \textbf{Detection de la pression.} La fonction \texttt{read\_meminfo()} (fichier \texttt{node\_state.rs}, ligne~287) lit \texttt{/proc/meminfo} et extrait \texttt{MemTotal} et \texttt{MemAvailable}. Si l'usage depasse le seuil \texttt{evict\_threshold\_pct} (defaut : 75\,\%, fichier \texttt{config.rs}, ligne~72), l'eviction est declenchee.
+    \item \textbf{Identification des VMs candidates.} Le \texttt{VmTracker} fournit la liste des VMs en etat \texttt{Running} sur le n\oe{}ud local (fichier \texttt{eviction\_engine.rs}, lignes~152--156).
+    \item \textbf{Selection des pages froides.} Pour chaque VM, les pages sont parcourues circulairement. Chaque page possede un bit de reference : s'il est a 1, il est remis a 0 (seconde chance) ; s'il est a 0, la page est selectionnee pour l'eviction.
+    \item \textbf{Envoi au store distant.} La page est envoyee via \texttt{PUT\_PAGE} TCP au n\oe{}ud le moins charge, choisi par \texttt{hash(vm\_id, page\_id) \% num\_stores}.
+    \item \textbf{Liberation locale.} L'appel \texttt{madvise(MADV\_DONTNEED)} libere la page du page table local apres envoi.
+\end{enumerate}
+
+L'intervalle d'eviction est adaptatif, comme le decrit la section suivante.
+
+% -----------------------------------------------------------------------------
+\subsection{Le FaultBus : couplage adaptatif eviction/recuperation}
+\label{subsec:faultbus}
+% -----------------------------------------------------------------------------
+
+Le \texttt{FaultBus} (fichier \texttt{omega-daemon/src/fault\_bus.rs}) est un canal IPC interne qui couple le handler \texttt{userfaultfd} au moteur d'eviction. Sans ce couplage, le moteur d'eviction ne sait pas qu'une page recemment evincee est en train d'etre rappellee, ce qui peut creer un phenomene de ping-pong.
+
+Le bus est implemente comme un canal \texttt{tokio::mpsc} d'une capacite de 4\,096~evenements (fichier \texttt{main.rs}, ligne~297). Trois types d'evenements sont emis (fichier \texttt{fault\_bus.rs}, lignes~38--50) :
+
+\begin{itemize}
+    \item \texttt{PageServed\{vm\_id, page\_id, latency\_us\}} : page recuperee depuis le store distant.
+    \item \texttt{PageMissing\{vm\_id, page\_id\}} : page absente du store (incoherence).
+    \item \texttt{PageLocal\{vm\_id, page\_id\}} : page resolue localement (RAM disponible).
+\end{itemize}
+
+Le consommateur \texttt{FaultBusConsumer} (ligne~138) accumule les statistiques sur une fen\^etre glissante temporelle et calcule le debit de fautes distantes (\texttt{remote\_rps}). L'\texttt{AdaptiveInterval} (ligne~243) exploite cette metrique pour ajuster le rythme d'eviction :
+
+\begin{itemize}
+    \item \textbf{Mode normal} : intervalle de 10 secondes entre chaque cycle d'eviction.
+    \item \textbf{Mode accelere} : intervalle reduit a 2 secondes lorsque \texttt{remote\_rps} depasse le seuil de 5.0 fautes/seconde (fichier \texttt{main.rs}, lignes~305--307).
+\end{itemize}
+
+Si le taux de recuperation reste eleve malgre le ralentissement de l'eviction, le daemon genere des recommandations de migration via la \texttt{MigrationPolicy} locale, signalant au contr\^oleur Python que la VM devrait etre deplacee vers un n\oe{}ud moins charge.
+
+% -----------------------------------------------------------------------------
+\subsection{Le protocole TCP binaire inter-n\oe{}uds}
+\label{subsec:protocole-tcp}
+% -----------------------------------------------------------------------------
+
+Les echanges de pages entre n\oe{}uds utilisent un protocole binaire proprietaire sur TCP, concu pour minimiser la latence de parsing. Chaque trame comporte un en-tete fixe de 20~octets suivi d'un payload variable. Le format est defini dans le fichier \texttt{docs/protocol.md} et implemente dans \texttt{node-bc-store/src/protocol.rs} :
+
+\begin{verbatim}
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|      magic (0x524D = "RM")    |   opcode      |     flags     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           vm_id (u32)                         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
+|                          page_id (u64)                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       payload_len (u32)                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               payload (0 a 8 192 octets)                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+\end{verbatim}
+
+Tous les champs multi-octets sont en big-endian. Le champ \texttt{magic} (\texttt{0x524D} pour \og RM \fg{} --- \textit{Remote Memory}) identifie le protocole. Le champ \texttt{flags} reserve le bit~0 pour la compression LZ4 (non activee par defaut).
+
+Les opcodes sont structures en deux categories :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Opcodes du protocole TCP de paging.}
+    \label{tab:opcodes-tcp}
+    \begin{tabular}{c c c p{0.40\linewidth}}
+        \toprule
+        \textbf{Opcode} & \textbf{Valeur} & \textbf{Sens} & \textbf{Description} \\
+        \midrule
+        \texttt{PING} & \texttt{0x01} & $\to$ & Verification de connectivite \\
+        \texttt{PUT\_PAGE} & \texttt{0x10} & $\to$ & Stocke une page (payload = 4\,096~octets) \\
+        \texttt{GET\_PAGE} & \texttt{0x11} & $\to$ & Recupere une page \\
+        \texttt{DELETE\_PAGE} & \texttt{0x12} & $\to$ & Supprime une page \\
+        \texttt{STATS\_REQUEST} & \texttt{0x20} & $\to$ & Demande les statistiques du store \\
+        \midrule
+        \texttt{PONG} & \texttt{0x02} & $\leftarrow$ & Reponse a \texttt{PING} \\
+        \texttt{OK} & \texttt{0x80} & $\leftarrow$ & Operation reussie (+ donnees si \texttt{GET}) \\
+        \texttt{NOT\_FOUND} & \texttt{0x81} & $\leftarrow$ & Page absente du store \\
+        \texttt{ERROR} & \texttt{0x82} & $\leftarrow$ & Erreur (message UTF-8 dans le payload) \\
+        \texttt{STATS\_RESPONSE} & \texttt{0x21} & $\leftarrow$ & Statistiques (JSON dans le payload) \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Le choix d'un protocole binaire fixe plut\^ot que JSON ou Protocol Buffers est motive par :
+
+\begin{itemize}
+    \item \textbf{Parsing $O(1)$.} L'en-tete est lu en une seule operation de 20~octets, sans analyse lexicale.
+    \item \textbf{Protection DoS.} Le payload est limite a $2 \times \texttt{PAGE\_SIZE} = 8\,192$ octets. Un attaquant ne peut pas envoyer de trames geantes.
+    \item \textbf{Latence deterministe.} La deserialization d'un JSON variable ajoute une variance de latence incompatible avec la contrainte C1.
+\end{itemize}
+
+La distribution des pages entre stores est deterministe : \texttt{hash(vm\_id, page\_id) \% num\_stores}. Ce schema evite toute coordination inter-n\oe{}uds pour localiser une page. Le facteur de replication est configurable (defaut : 2 copies via la variable d'environnement \texttt{OMEGA\_REPLICATION\_FACTOR}).
+
+% -----------------------------------------------------------------------------
+\subsection{Securisation du canal : TLS TOFU}
+\label{subsec:tls-tofu}
+% -----------------------------------------------------------------------------
+
+Les pages memoire des VMs contiennent potentiellement des donnees sensibles (mots de passe, cles, donnees applicatives). Sans chiffrement, tout equipement reseau intermediaire peut lire ou modifier les pages en transit.
+
+Le module TLS (fichier \texttt{omega-daemon/src/tls.rs}) implemente un chiffrement du canal TCP (port~9100) avec les caracteristiques suivantes :
+
+\begin{itemize}
+    \item \textbf{Certificat auto-signe} : au premier demarrage, une paire de cles RSA-2048 et un certificat X.509 sont generes automatiquement via la bibliotheque \texttt{rcgen} et sauvegardes dans \texttt{/etc/omega-store/tls/} (\texttt{cert.pem} + \texttt{key.pem}).
+    \item \textbf{Modele TOFU} (\textit{Trust On First Use}) : la verification des pairs s'effectue par empreinte SHA-256 du certificat, fixee dans la configuration. Aucune autorite de certification n'est necessaire, ce qui simplifie le deploiement.
+    \item \textbf{TLS~1.3} : le chiffrement utilise AES-256-GCM via la bibliotheque \texttt{rustls} (avec le backend \texttt{ring}).
+\end{itemize}
+
+Le surcout de performance a ete mesure et documente (fichier \texttt{tls.rs}, lignes 30--35) :
+
+\begin{itemize}
+    \item Handshake TLS~1.3 : $\sim$0,5~ms (une seule fois par connexion).
+    \item Chiffrement AES-256-GCM : $\sim$0,3~ns/octet $= \sim$1,2~\textmu{}s/page (4~Kio).
+    \item Surcout total par page : $< 2$~\textmu{}s, a comparer a la latence reseau de 50--500~\textmu{}s.
+\end{itemize}
+
+L'impact est donc negligeable sur les performances en pratique, ce qui justifie l'activation systematique du chiffrement.
+
+% -----------------------------------------------------------------------------
+\subsection{Thin-provisioning par balloon virtio}
+\label{subsec:balloon}
+% -----------------------------------------------------------------------------
+
+Le mecanisme de balloon virtio permet d'ajuster dynamiquement la quantite de RAM physique consommee par une VM sans l'arreter~\cite{qemu_balloon}. Le module \texttt{balloon.rs} (fichier \texttt{omega-daemon/src/balloon.rs}) implemente deux composants complementaires :
+
+\begin{enumerate}
+    \item \textbf{\texttt{BalloonMonitor}} : lit les statistiques internes de chaque VM via le protocole QMP (socket Unix \texttt{/var/run/qemu-server/\{vmid\}.qmp}) toutes les 15~secondes (fichier \texttt{main.rs}, ligne~353). Les statistiques incluent la RAM libre c\^ote guest (\texttt{free\_pct}), la RAM totale, et le nombre de defauts de page majeurs. Si \texttt{free\_pct} descend sous 20\,\% (fichier \texttt{main.rs}, ligne~357), un avertissement est emis.
+
+    \item \textbf{\texttt{BalloonManager}} : gonfle proactivement le balloon des guests sur-provisionnes pour recuperer la RAM inutilisee, et le degonfle lorsqu'un guest est sous pression. La reconciliation s'effectue toutes les 30~secondes (fichier \texttt{main.rs}, ligne~392).
+\end{enumerate}
+
+Le lien avec le systeme de quotas est direct : lorsque le balloon reduit la RAM physique du guest a \texttt{balloon\_actual\_mib}, le budget distant peut cro\^itre dynamiquement :
+
+\begin{equation}
+    \label{eq:balloon-quota}
+    \texttt{remote\_budget} = \texttt{max\_mem} - \texttt{balloon\_actual}
+\end{equation}
+
+Cette mise a jour est realisee par l'appel \texttt{apply\_balloon\_update(vmid, actual\_mib)} qui declenche \texttt{adjust\_for\_balloon()} dans le \texttt{QuotaRegistry} (fichier \texttt{quota.rs}, lignes~123--143).
+
+% =============================================================================
+\section{Contr\^ole d'admission et systeme de quotas}
+\label{sec:quotas}
+% =============================================================================
+
+Le contr\^ole d'admission et le systeme de quotas garantissent qu'aucune VM ne consomme plus de memoire que ce qui lui a ete accorde. Cette garantie formelle est le fondement de la fiabilite du systeme.
+
+% -----------------------------------------------------------------------------
+\subsection{L'invariant de quota et sa demonstration formelle}
+\label{subsec:invariant-quota}
+% -----------------------------------------------------------------------------
+
+Le systeme de quotas est implemente dans le fichier \texttt{omega-daemon/src/quota.rs}. La structure \texttt{VmQuota} (ligne~52) definit, pour chaque VM, les grandeurs suivantes :
+
+\begin{itemize}
+    \item \texttt{max\_mem\_mib} : RAM totale demandee par la VM (Mio).
+    \item \texttt{local\_budget\_mib} : budget alloue sur le n\oe{}ud h\^ote (Mio).
+    \item \texttt{remote\_budget\_mib} : budget maximum autorise sur les stores distants (Mio).
+    \item \texttt{remote\_used\_mib} : consommation actuelle du budget distant (Mio).
+\end{itemize}
+
+L'invariant central du systeme est defini au constructeur (ligne~71) :
+
+\begin{equation}
+    \label{eq:quota-remote}
+    \texttt{remote\_budget\_mib} = \texttt{max\_mem\_mib} - \texttt{local\_budget\_mib}
+\end{equation}
+
+Ce qui garantit, par construction :
+
+\begin{equation}
+    \label{eq:quota-total}
+    \texttt{local\_budget\_mib} + \texttt{remote\_budget\_mib} = \texttt{max\_mem\_mib}
+\end{equation}
+
+La verification est assuree a deux niveaux :
+
+\begin{enumerate}
+    \item \textbf{A l'admission} (contr\^oleur Python, fichier \texttt{admission.py}) : le contr\^oleur calcule le budget local et distant et verifie que l'equation~(\ref{eq:quota-total}) est satisfaite avant de pousser la configuration au daemon.
+    \item \textbf{A chaque ecriture de page} (daemon Rust) : la methode \texttt{check\_put()} (fichier \texttt{quota.rs}, ligne~211) est appelee avant chaque \texttt{PUT\_PAGE}. Elle verifie :
+    \begin{equation}
+        \label{eq:check-put}
+        \texttt{remote\_used\_mib} + \left\lceil\frac{\texttt{page\_size}}{1\,048\,576}\right\rceil \leq \texttt{remote\_budget\_mib}
+    \end{equation}
+    Si cette condition est violee, l'ecriture est rejetee avec le statut \texttt{QuotaCheck::Exceeded} et la page n'est pas stockee.
+\end{enumerate}
+
+Le \texttt{QuotaRegistry} (ligne~172) utilise un \texttt{RwLock<HashMap<u32, VmQuota>{>}} qui permet des lectures concurrentes non bloquantes entre elles (cas frequent : chaque \texttt{PUT\_PAGE} appelle \texttt{check\_put()}), tout en serialisant les ecritures (cas rare : configuration de quota, ajustement balloon).
+
+% -----------------------------------------------------------------------------
+\subsection{Flux de configuration d'un quota}
+\label{subsec:flux-quota}
+% -----------------------------------------------------------------------------
+
+La configuration d'un quota suit un flux en quatre etapes :
+
+\begin{verbatim}
+1. Controller calcule : local_budget = RAM disponible sur le noeud cible
+                        remote_budget = max_mem - local_budget
+2. POST /control/vm/{vmid}/quota -> QuotaRegistry.set()
+3. Hook Proxmox (post-start) declenche la configuration initiale
+4. Ajustements dynamiques : balloon, migration, arret VM
+\end{verbatim}
+
+Apres une migration, \texttt{record\_delete\_vm()} (ligne~259) remet a zero la consommation distante. Apres l'arr\^et d'une VM, \texttt{remove()} (ligne~202) supprime completement le quota.
+
+% -----------------------------------------------------------------------------
+\subsection{Admission RAM a l'echelle du cluster}
+\label{subsec:admission-ram}
+% -----------------------------------------------------------------------------
+
+L'\texttt{AdmissionController} (fichier \texttt{controller/controller/admission.py}) coordonne l'admission des nouvelles VMs a l'echelle du cluster. Pour chaque demande de creation de VM, il effectue les verifications suivantes :
+
+\begin{enumerate}
+    \item \textbf{Capacite totale.} La somme des RAM disponibles sur tous les n\oe{}uds du cluster doit etre superieure ou egale a \texttt{vm.max\_mem}.
+    \item \textbf{Selection du n\oe{}ud cible.} Le moteur de placement topologique (fichier \texttt{topology\_placement.py}) calcule un score multi-criteres pour chaque n\oe{}ud candidat :
+    \begin{equation}
+        \label{eq:placement-score}
+        \text{score}(n) = 0{,}50 \times r_{\text{RAM}} + 0{,}25 \times r_{\text{topo}} + 0{,}15 \times r_{\text{CPU}} + 0{,}10 \times r_{\text{migr}}
+    \end{equation}
+    o\`u $r_{\text{RAM}}$ est la RAM libre normalisee, $r_{\text{topo}}$ le score topologique (1,0 si meme rack, 0,7 si meme zone, 0,3 si inter-zone), $r_{\text{CPU}} = 1 - \text{cpu\_usage}$, et $r_{\text{migr}} = 1 / (1 + \text{migrations\_en\_cours})$.
+    \item \textbf{Veto.} Si aucun n\oe{}ud ne peut accueillir la VM sans depasser 80\,\% de RAM utilisee, l'admission est refusee.
+\end{enumerate}
+
+% -----------------------------------------------------------------------------
+\subsection{Admission vCPU et GPU}
+\label{subsec:admission-cpu-gpu}
+% -----------------------------------------------------------------------------
+
+L'admission des ressources CPU est geree par le \texttt{ClusterVcpuPoolPlanner} (fichier \texttt{controller/controller/cpu\_admission.py}). Il selectionne le n\oe{}ud avec le plus de slots vCPU libres et verifie que l'overcommit ne depasse pas $3\times$ le nombre de c\oe{}urs physiques.
+
+L'admission GPU est geree par le \texttt{GpuAdmissionController} (fichier \texttt{controller/controller/gpu\_admission.py}). Pour chaque VM necessitant un GPU, il verifie que le n\oe{}ud cible dispose de suffisamment de VRAM libre :
+
+\begin{equation}
+    \texttt{gpu\_free\_vram\_mib} \geq \texttt{vm.gpu\_budget\_mib}
+\end{equation}
+
+Si aucun n\oe{}ud GPU n'a assez de VRAM, l'admission est refusee. Ces trois contr\^oles (RAM, vCPU, GPU) sont evalues conjointement : la VM n'est admise que si les trois sont satisfaits.
+
+% =============================================================================
+\section{Scheduler vCPU elastique}
+\label{sec:vcpu-scheduler}
+% =============================================================================
+
+Le scheduler vCPU gere l'allocation dynamique des c\oe{}urs virtuels sur chaque n\oe{}ud. Plut\^ot qu'allouer statiquement les vCPU au demarrage, le systeme adopte un modele elastique o\`u les VMs re\c{c}oivent des c\oe{}urs supplementaires selon leur charge reelle.
+
+% -----------------------------------------------------------------------------
+\subsection{Modele d'allocation elastique}
+\label{subsec:modele-vcpu}
+% -----------------------------------------------------------------------------
+
+Le modele est defini dans le fichier \texttt{omega-daemon/src/vcpu\_scheduler.rs} par les constantes suivantes (lignes 46--70) :
+
+\begin{itemize}
+    \item \texttt{VCPU\_PER\_PCPU = 3} : chaque c\oe{}ur physique expose 3 slots virtuels.
+    \item \texttt{MAX\_VMS\_PER\_SLOT = 3} : un slot vCPU peut etre partage entre au maximum 3 VMs simultanement (le scheduler CFS du noyau Linux gere le decoupage temporel).
+    \item \texttt{HOTPLUG\_TRIGGER\_PCT = 80.0} : seuil d'utilisation CPU declenchant un hotplug.
+    \item \texttt{DOWNSCALE\_TRIGGER\_PCT = 35.0} : seuil sous lequel un retrait progressif est envisage.
+    \item \texttt{DOWNSCALE\_STABLE\_SECS = 60} : duree minimale de faible charge avant retrait.
+    \item \texttt{STEAL\_THRESHOLD\_PCT = 10.0} : seuil de steal time declenchant une migration prioritaire.
+\end{itemize}
+
+Chaque VM est modelisee par la structure \texttt{VmVcpuState} (ligne~92), qui maintient :
+
+\begin{itemize}
+    \item \texttt{min\_vcpus} : nombre de vCPU au demarrage (lu depuis \texttt{vcpus:} dans la configuration Proxmox).
+    \item \texttt{max\_vcpus} : plafond demande ($= \texttt{sockets} \times \texttt{cores}$, lu depuis le fichier \texttt{.conf}).
+    \item \texttt{current\_vcpus} : vCPU actuellement alloues ($\texttt{min} \leq \texttt{current} \leq \texttt{max}$).
+    \item \texttt{cpu\_usage\_pct} : utilisation CPU moyenne sur les 60 dernieres secondes.
+    \item \texttt{steal\_pct} : pourcentage de temps CPU vole par l'hyperviseur.
+    \item \texttt{cpu\_weight} : poids cgroup \texttt{cpu.weight} actuellement applique.
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\subsection{Mecanismes de hotplug et downscale}
+\label{subsec:hotplug-downscale}
+% -----------------------------------------------------------------------------
+
+Le hotplug de vCPU est declenche lorsque l'une des deux conditions suivantes est detectee :
+
+\begin{enumerate}
+    \item \texttt{avg\_cpu\_pct} $\geq$ \texttt{HOTPLUG\_TRIGGER\_PCT} (80\,\%).
+    \item \texttt{throttle\_ratio} $\geq$ \texttt{THROTTLE\_THRESHOLD} (10\,\%, fichier \texttt{cgroup\_cpu\_monitor.rs}, ligne~49).
+\end{enumerate}
+
+La detection s'effectue a deux frequences :
+
+\begin{itemize}
+    \item \textbf{Haute frequence (1~ms)} : le \texttt{CgroupCpuMonitor} (fichier \texttt{cgroup\_cpu\_monitor.rs}) lit \texttt{cpu.stat} de chaque VM toutes les millisecondes via une fen\^etre glissante de 100~echantillons (\texttt{WINDOW\_SIZE = 100}, ligne~45). Il emet un \texttt{CpuPressureEvent} lorsque les seuils sont depasses. Ce monitor est implemente en Rust plut\^ot qu'en Python car le GIL empeche la parallelisation des lectures cgroups sous charge (20+ VMs).
+    \item \textbf{Basse frequence (100~ms+)} : la boucle principale de monitoring CPU (fichier \texttt{main.rs}, lignes~170--292) lit \texttt{cpu.stat} et calcule l'usage par difference de compteurs.
+\end{itemize}
+
+La realisation du hotplug s'effectue via le protocole QMP (QEMU Machine Protocol) :
+
+\begin{verbatim}
+hotplug   : device_add cpu,id=cpu{n}  -> HotplugResult::Added{new_count}
+hot-unplug: device_del cpu{n}         -> HotplugResult::Removed{new_count}
+\end{verbatim}
+
+Si le hotplug QMP echoue (plus de slots disponibles), le scheduler annule sa reservation interne via \texttt{rollback\_hotplug()} et genere une decision \texttt{VcpuDecision::MigrateRequired} (fichier \texttt{main.rs}, lignes~735--753).
+
+Le downscale suit un processus inverse : lorsque \texttt{avg\_cpu\_pct} $<$ 35\,\% depuis au moins 60~secondes (\texttt{DOWNSCALE\_STABLE\_SECS}), un vCPU est retire via \texttt{device\_del}.
+
+% -----------------------------------------------------------------------------
+\subsection{Partage CPU local temporaire}
+\label{subsec:partage-cpu}
+% -----------------------------------------------------------------------------
+
+Avant de recourir a la migration, le systeme tente de reequilibrer les ressources CPU localement via trois mecanismes successifs (fichier \texttt{main.rs}, fonction \texttt{reconcile\_local\_cpu\_sharing}, lignes~861--950) :
+
+\begin{enumerate}
+    \item \textbf{Reclamation locale.} Un donor idle (VM durablement sous-utilisee) libere un vCPU via hot-unplug. Ce vCPU est immediatement attribue au borrower (VM sous pression) via hotplug.
+    \item \textbf{Partage via \texttt{cpu.weight}.} Les poids cgroup sont ajustes :
+    \begin{itemize}
+        \item Borrower (VM sous pression) : \texttt{BOOSTED\_CPU\_WEIGHT = 200} (ligne~66).
+        \item Donor (VM idle) : \texttt{DONOR\_CPU\_WEIGHT = 50} (ligne~69).
+        \item VM nominale : \texttt{DEFAULT\_CPU\_WEIGHT = 100} (ligne~64).
+    \end{itemize}
+    Une contrainte de securite empeche un donor de perdre trop de capacite : son steal time doit rester inferieur a \texttt{DONOR\_SAFE\_STEAL\_PCT = 5.0\,\%} (ligne~73).
+    \item \textbf{Migration.} Si la saturation persiste malgre le partage local, la VM est signalee comme candidate a la migration.
+\end{enumerate}
+
+% -----------------------------------------------------------------------------
+\subsection{Escalade vers la migration}
+\label{subsec:escalade-migration}
+% -----------------------------------------------------------------------------
+
+Le scheduler ne decide jamais d'une migration de maniere autonome. Il expose les signaux de pression via le snapshot \texttt{NodeStatus} (fichier \texttt{node\_state.rs}), que le contr\^oleur Python interroge periodiquement via \texttt{GET /api/status}. Deux conditions declenchent l'escalade :
+
+\begin{enumerate}
+    \item \texttt{steal\_pct} $>$ \texttt{STEAL\_THRESHOLD\_PCT} (10\,\%) de maniere persistante.
+    \item Aucun slot hotpluggable disponible et la VM est encore throttlee.
+\end{enumerate}
+
+Le contr\^oleur Python evalue alors la migration en tenant compte de l'ensemble des ressources du cluster (section~\ref{sec:migration}).
+
+% =============================================================================
+\section{Scheduler I/O disque}
+\label{sec:disk-scheduler}
+% =============================================================================
+
+Le scheduler disque gere la contention I/O locale entre les VMs d'un meme n\oe{}ud. Bien que le stockage des disques virtuels repose sur Ceph RBD (partage), les operations d'entree/sortie locales (cache, journalisation) peuvent creer des goulots d'etranglement.
+
+% -----------------------------------------------------------------------------
+\subsection{Lecture de la pression I/O via PSI}
+\label{subsec:psi-io}
+% -----------------------------------------------------------------------------
+
+La pression I/O du n\oe{}ud est mesuree via PSI (Pressure Stall Information), un mecanisme du noyau Linux 4.20+ qui quantifie le temps passe a attendre des ressources~\cite{psi_doc}. Le fichier \texttt{/proc/pressure/io} expose la metrique \texttt{some.avg10} : le pourcentage du temps (sur 10~secondes) durant lequel au moins un thread attendait de l'I/O.
+
+L'interpretation est la suivante (documentee dans \texttt{docs/metrics.md}, lignes~96--101) :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Interpretation des niveaux de pression PSI I/O.}
+    \label{tab:psi-interpretation}
+    \begin{tabular}{c p{0.55\linewidth}}
+        \toprule
+        \textbf{Valeur \texttt{some.avg10}} & \textbf{Interpretation} \\
+        \midrule
+        0 -- 1\,\% & Aucune pression \\
+        1 -- 5\,\% & Pression moderee \\
+        5 -- 10\,\% & Pression elevee (seuil de declenchement) \\
+        $>$ 10\,\% & Pression critique \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Le module \texttt{io\_cgroup.rs} (fichier \texttt{omega-daemon/src/io\_cgroup.rs}) lit la pression via \texttt{CgroupIoController::read\_node\_pressure\_pct()}.
+
+% -----------------------------------------------------------------------------
+\subsection{Politique de poids \texttt{io.weight}}
+\label{subsec:io-weight}
+% -----------------------------------------------------------------------------
+
+Le scheduler disque (fichier \texttt{omega-daemon/src/disk\_io\_scheduler.rs}) definit trois niveaux de poids (lignes 17--19) :
+
+\begin{itemize}
+    \item \texttt{DEFAULT\_IO\_WEIGHT = 100} : poids nominal de toute VM.
+    \item \texttt{BOOSTED\_IO\_WEIGHT = 200} : poids accorde a une VM active sous pression.
+    \item \texttt{DONOR\_IO\_WEIGHT = 50} : poids reduit pour une VM durablement idle.
+\end{itemize}
+
+Le declenchement du boosting requiert deux conditions simultanees (lignes~67--69 de la structure \texttt{VmDiskState}) :
+
+\begin{enumerate}
+    \item La pression I/O du n\oe{}ud depasse \texttt{DISK\_PRESSURE\_TRIGGER\_PCT = 5.0\,\%} (PSI \texttt{some.avg10}).
+    \item Le debit total de la VM depasse \texttt{DISK\_BORROWER\_TRIGGER\_BPS = 8~Mio/s}.
+\end{enumerate}
+
+Une VM est consideree idle lorsque son debit total est inferieur a \texttt{DISK\_IDLE\_BPS = 512~Kio/s} depuis au moins \texttt{DISK\_IDLE\_STABLE\_SECS = 60~s} (lignes 22--23).
+
+Si \texttt{io.weight} n'est pas disponible dans le cgroup de la VM (backend non supporte), le systeme effectue un fallback gracieux : la methode \texttt{mark\_io\_control\_unsupported()} desactive le contr\^ole pour cette VM et consigne la raison dans les logs (fichier \texttt{main.rs}, lignes~979--1004). La telemetrie et la migration restent actives.
+
+% -----------------------------------------------------------------------------
+\subsection{Lecture des compteurs reels \texttt{io.stat}}
+\label{subsec:io-stat}
+% -----------------------------------------------------------------------------
+
+Le module \texttt{io\_cgroup.rs} lit les compteurs I/O reels depuis le fichier cgroup v2 \texttt{io.stat} de chaque VM. Le format est \texttt{<major>:<minor> rbytes=... wbytes=...}. Le debit en octets/seconde est calcule par difference de snapshots successifs :
+
+\begin{equation}
+    \text{read\_bps} = \frac{\texttt{rbytes\_now} - \texttt{rbytes\_before}}{\Delta t_{\mu s}} \times 10^6
+\end{equation}
+
+Ces valeurs alimentent le scheduler disque et sont exposees dans le snapshot \texttt{VmStatusEntry} (fichier \texttt{node\_state.rs}, lignes~68--70), rendant les debits I/O par VM visibles au contr\^oleur Python pour les decisions de migration.
+
+% =============================================================================
+\section{Multiplexeur GPU}
+\label{sec:gpu-multiplexer}
+% =============================================================================
+
+Le multiplexeur GPU permet de partager un GPU physique unique entre plusieurs VMs d'un meme n\oe{}ud, avec un contr\^ole fin de la VRAM consommee par chaque VM.
+
+% -----------------------------------------------------------------------------
+\subsection{Problematique du partage GPU}
+\label{subsec:problematique-gpu}
+% -----------------------------------------------------------------------------
+
+Dans un cluster Proxmox standard, un GPU physique ne peut etre assigne qu'a une seule VM via le mecanisme de PCI passthrough. Cette exclusivite est probl\'ematique lorsque plusieurs VMs necessite des capacites GPU (inference IA, rendu graphique) mais qu'aucune n'utilise le GPU a pleine capacite en permanence.
+
+Les alternatives considerees et ecartees sont :
+
+\begin{itemize}
+    \item \textbf{SR-IOV (Single Root I/O Virtualization)} : necessite un GPU compatible et un support pilote, limite a certaines gammes NVIDIA/AMD.
+    \item \textbf{vGPU (NVIDIA GRID/MIG)} : solution proprietaire necessitant des licences co\^uteuses.
+    \item \textbf{Multiplexeur en espace utilisateur} (retenu) : un daemon intermediaire arbitre les acces GPU via un socket Unix, sans modification du pilote noyau.
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\subsection{Architecture du multiplexeur}
+\label{subsec:architecture-mux}
+% -----------------------------------------------------------------------------
+
+Le multiplexeur (fichier \texttt{omega-daemon/src/gpu\_multiplexer.rs}) ecoute sur un socket Unix (\texttt{/run/omega/gpu.sock}) et gere les requetes GPU de toutes les VMs du n\oe{}ud. Son architecture interne repose sur trois composants :
+
+\begin{enumerate}
+    \item \textbf{File de priorite.} Les commandes GPU sont ordonnees par un \texttt{BinaryHeap} (ligne~31) selon deux criteres :
+    \begin{itemize}
+        \item Priorite du message : \texttt{RealTime} (3) $>$ \texttt{High} (2) $>$ \texttt{Normal} (1) $>$ \texttt{Low} (0).
+        \item Timestamp d'arrivee (FIFO a meme priorite).
+    \end{itemize}
+
+    \item \textbf{Worker unique.} Un thread unique consomme la file et soumet les commandes au GPU physique. Cette serialisation est necessaire car la plupart des pilotes GPU ne sont pas thread-safe (lignes~27--29 du fichier \texttt{gpu\_multiplexer.rs}).
+
+    \item \textbf{Budget VRAM par VM.} Chaque VM dispose d'un \texttt{VmVramBudget} (ligne~47) qui definit un budget total en Mio et suit la VRAM actuellement allouee. La methode \texttt{can\_alloc\_bytes()} (ligne~67) verifie que toute allocation respecte le budget :
+    \begin{equation}
+        \texttt{used\_mib} + \left\lceil\frac{\texttt{bytes}}{1\,048\,576}\right\rceil \leq \texttt{budget\_mib}
+    \end{equation}
+\end{enumerate}
+
+% -----------------------------------------------------------------------------
+\subsection{Protocole GPU binaire}
+\label{subsec:protocole-gpu}
+% -----------------------------------------------------------------------------
+
+Le protocole entre les VMs et le multiplexeur utilise un format binaire proprietaire avec un header fixe de 22~octets (fichier \texttt{omega-daemon/src/gpu\_protocol.rs}) :
+
+\begin{verbatim}
++----------+----------+----------+----------+----------+
+| magic 4B | vers. 1B | type  1B | vm_id 4B |  seq 4B  |
++----------+----------+----------+----------+----------+
+| payload_len 4B | priority 1B | reserved 3B            |
++----------+----------+-----------------------------------+
+| payload (variable)                                      |
++---------------------------------------------------------+
+\end{verbatim}
+
+Le nombre magique est \texttt{0x4F4D4750} (\og OMGP \fg{} pour \textit{Omega GPU Protocol}, fichier \texttt{gpu\_protocol.rs}, ligne~32). Les types de messages sont definis par l'enumeration \texttt{MsgType} (lignes~39--49) :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Types de messages du protocole GPU.}
+    \label{tab:gpu-msg-types}
+    \begin{tabular}{c c c p{0.40\linewidth}}
+        \toprule
+        \textbf{Type} & \textbf{Valeur} & \textbf{Sens} & \textbf{Description} \\
+        \midrule
+        \texttt{GPU\_CMD} & \texttt{0x01} & VM$\to$GPU & Commande GPU brute \\
+        \texttt{GPU\_RESULT} & \texttt{0x02} & GPU$\to$VM & Resultat d'une commande \\
+        \texttt{GPU\_ALLOC} & \texttt{0x03} & VM$\to$GPU & Allocation VRAM \\
+        \texttt{GPU\_ALLOC\_RESP} & \texttt{0x04} & GPU$\to$VM & Handle VRAM alloue \\
+        \texttt{GPU\_FREE} & \texttt{0x05} & VM$\to$GPU & Liberation VRAM \\
+        \texttt{GPU\_SYNC} & \texttt{0x06} & Bidir. & Barriere de synchronisation \\
+        \texttt{GPU\_ERROR} & \texttt{0xFF} & GPU$\to$VM & Erreur d'execution \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+La correlation requete/reponse est assuree par le champ \texttt{seq} : le multiplexeur maintient un \texttt{HashMap<(vm\_id, seq), oneshot::Sender>} pour router chaque reponse vers la t\^ache Tokio correspondante.
+
+% -----------------------------------------------------------------------------
+\subsection{Source de verite GPU}
+\label{subsec:gpu-source-verite}
+% -----------------------------------------------------------------------------
+
+Le backend GPU reel est implemente par le \texttt{DrmGpuBackend} (fichier \texttt{omega-daemon/src/gpu\_drm\_backend.rs}), qui lit la capacite du GPU physique via les interfaces DRM du noyau (\texttt{/dev/dri/renderD*} et sysfs VRAM). La source de verite est explicite :
+
+\begin{itemize}
+    \item La \textbf{capacite du n\oe{}ud} provient du backend DRM reel.
+    \item Les \textbf{budgets des VMs} proviennent de la configuration Proxmox (champs \texttt{description} et \texttt{tags}).
+    \item Le contr\^oleur Python ne reinvente pas ces valeurs : il consomme ce que le daemon publie via \texttt{/control/gpu/status} et \texttt{/api/status}.
+\end{itemize}
+
+% =============================================================================
+\section{Migration automatique de VMs}
+\label{sec:migration}
+% =============================================================================
+
+La migration automatique est le mecanisme de dernier recours qui reequilibre le cluster lorsque les mecanismes locaux (eviction, partage CPU/disque) ne suffisent plus. Elle exploite les capacites natives de Proxmox (\texttt{qm migrate}) avec deux strategies : live et cold.
+
+% -----------------------------------------------------------------------------
+\subsection{Politique de decision live vs cold}
+\label{subsec:live-vs-cold}
+% -----------------------------------------------------------------------------
+
+La politique de migration est implementee dans deux modules complementaires : \texttt{vm\_migration.rs} (daemon Rust, lignes 1--17) et \texttt{migration\_policy.py} (contr\^oleur Python). La matrice de decision est la suivante :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Matrice de decision du type de migration.}
+    \label{tab:migration-matrice}
+    \begin{tabular}{p{0.25\linewidth} p{0.25\linewidth} c}
+        \toprule
+        \textbf{Etat de la VM} & \textbf{Pression n\oe{}ud} & \textbf{Type} \\
+        \midrule
+        Stopped & Indifferent & COLD \\
+        Running, CPU $>$ 5\,\% & RAM $>$ 85\,\% & LIVE \\
+        Running, CPU $<$ 5\,\% (idle $>$ 60s) & RAM $>$ 85\,\% & COLD \\
+        Running, CPU $>$ 5\,\% & RAM $>$ 95\,\% (critique) & COLD \\
+        Running, throttle $>$ 30\,\% & vCPU sature ($>$ 90\,\%) & LIVE \\
+        Running, I/O $>$ 8~Mio/s & PSI $>$ 10\,\% & LIVE \\
+        GPU VRAM $>$ 90\,\% reserve & N/A & LIVE/COLD \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Les seuils sont configures dans la structure \texttt{MigrationThresholds} (fichier \texttt{migration\_policy.py}, lignes~188--211) :
+
+\begin{itemize}
+    \item \texttt{ram\_high\_pct = 85.0} : pression haute $\to$ migration live.
+    \item \texttt{ram\_critical\_pct = 95.0} : pression critique $\to$ cold forcee (trop de dirty pages pour que la live converge).
+    \item \texttt{vcpu\_throttle\_trigger = 0.30} : throttle $>$ 30\,\% $\to$ migration.
+    \item \texttt{vcpu\_saturation\_pct = 90.0} : n\oe{}ud $>$ 90\,\% vCPU utilises.
+    \item \texttt{remote\_paging\_pct = 60.0} : $>$ 60\,\% de la RAM en distant $\to$ rapatrier.
+    \item \texttt{idle\_cpu\_pct = 5.0} et \texttt{idle\_duration\_secs = 60.0} : VM idle.
+\end{itemize}
+
+Les raisons de migration sont enumerees par \texttt{MigrationReason} (fichier \texttt{vm\_migration.rs}, ligne~64) : \texttt{MemoryPressure}, \texttt{CpuSaturation}, \texttt{ExcessiveRemotePaging}, \texttt{MaintenanceDrain}, \texttt{AdminRequest}. Le contr\^oleur Python ajoute \texttt{DiskSaturation} et \texttt{GpuSaturation} (fichier \texttt{migration\_policy.py}, lignes~50--57).
+
+% -----------------------------------------------------------------------------
+\subsection{Selection du n\oe{}ud cible}
+\label{subsec:selection-cible}
+% -----------------------------------------------------------------------------
+
+Le choix du n\oe{}ud cible utilise un score composite calcule par la methode \texttt{\_placement\_score\_for\_vm()} (fichier \texttt{migration\_policy.py}, lignes~534--556). Deux cas sont distingues :
+
+\textbf{VM sans GPU :}
+\begin{equation}
+    \label{eq:score-sans-gpu}
+    \text{score} = 0{,}50 \times r_{\text{RAM}} + 0{,}30 \times r_{\text{vCPU}} + 0{,}15 \times r_{\text{disk}} + 0{,}05 \times r_{\text{conso}}
+\end{equation}
+
+\textbf{VM avec GPU :}
+\begin{equation}
+    \label{eq:score-avec-gpu}
+    \text{score} = 0{,}35 \times r_{\text{GPU}} + 0{,}30 \times r_{\text{RAM}} + 0{,}20 \times r_{\text{vCPU}} + 0{,}10 \times r_{\text{disk}} + 0{,}05 \times r_{\text{conso}}
+\end{equation}
+
+o\`u $r_{\text{conso}} = \min(\text{local\_vms}, 12) / 12$ penalise la consolidation excessive. Un veto absolu empeche l'envoi vers un n\oe{}ud qui, apres accueil de la VM, descendrait sous 20\,\% de RAM libre (methode \texttt{can\_accept\_vm()}, ligne~103).
+
+% -----------------------------------------------------------------------------
+\subsection{Execution et nettoyage}
+\label{subsec:execution-nettoyage}
+% -----------------------------------------------------------------------------
+
+L'execution des migrations est geree par le \texttt{MigrationExecutor} (fichier \texttt{vm\_migration.rs}). Le flux est le suivant :
+
+\begin{verbatim}
+MigrationExecutor.spawn(request)
+  |
+  +-- LIVE : tokio::process::Command("qm migrate {vmid} {target} --online")
+  |          Ceph RBD : disques partages, seule la RAM est transferee
+  |          KVM pre-copy : pages transferees iterativement, downtime < 1s
+  |
+  +-- COLD : tokio::process::Command("qm migrate {vmid} {target}")
+  |          VM stoppee, transferee, redemarree sur le noeud cible
+  |
+  +-- cleanup_after_migration():
+       - Suppression des pages du store : record_delete_vm()
+       - Liberation des slots vCPU : vcpu_scheduler.release_vm()
+       - Retrait du quota RAM : quota_registry.remove()
+       - Liberation du budget GPU : gpu_runtime.release_vm()
+\end{verbatim}
+
+Chaque migration est tracee par un \texttt{task\_id} et son statut (\texttt{Pending}, \texttt{Running}, \texttt{Success}, \texttt{Failed}) est consultable via l'API \texttt{/control/migrate/status}.
+
+% -----------------------------------------------------------------------------
+\subsection{Double plan de declenchement}
+\label{subsec:double-declenchement}
+% -----------------------------------------------------------------------------
+
+Les migrations sont declenchees par deux plans independants et complementaires :
+
+\begin{enumerate}
+    \item \textbf{Plan local (daemon Rust).} L'\texttt{EvictionEngine} (fichier \texttt{eviction\_engine.rs}, lignes~167--213) evalue les recommandations de la \texttt{MigrationPolicy} locale et declenche au maximum une migration par cycle. Ce plan reagit rapidement a la pression memoire locale.
+
+    \item \textbf{Plan global (contr\^oleur Python).} La \texttt{MigrationPolicy} Python (fichier \texttt{migration\_policy.py}, methode \texttt{evaluate()}, ligne~230) analyse l'etat complet du cluster et peut declencher plusieurs migrations simultanees. Elle deduplique les candidats (une VM ne migre qu'une fois) et les trie par urgence decroissante.
+\end{enumerate}
+
+Cette architecture a double plan garantit que les migrations urgentes (pression locale critique) sont traitees rapidement par le daemon, tandis que le contr\^oleur Python optimise les migrations a l'echelle du cluster avec une vue globale.
+
+% =============================================================================
+\section{Orchestration cluster et resilience}
+\label{sec:orchestration}
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+\subsection{Collecte d'etat resiliente}
+\label{subsec:collecte-resiliente}
+% -----------------------------------------------------------------------------
+
+Le \texttt{ResilientCollector} (fichier \texttt{controller/controller/resilient\_collector.py}) remplace le collecteur original par une implementation tolerante aux pannes. Il ajoute trois mecanismes :
+
+\begin{enumerate}
+    \item \textbf{Retry avec backoff exponentiel} : jusqu'a \texttt{max\_retries} tentatives, avec delai double a chaque echec (0,5s $\to$ 1s $\to$ 2s).
+
+    \item \textbf{Circuit-breaker par n\oe{}ud} (lignes~63--72) :
+    \begin{itemize}
+        \item Seuil d'echec : \texttt{failure\_threshold = 3} echecs consecutifs.
+        \item Duree d'ouverture : \texttt{open\_duration\_secs = 30~s}.
+        \item Machine a etats : \texttt{CLOSED} $\to$ \texttt{OPEN} $\to$ \texttt{HALF\_OPEN} $\to$ \texttt{CLOSED}.
+    \end{itemize}
+
+    \item \textbf{Cache du dernier etat connu} : si un n\oe{}ud est injoignable, son dernier etat connu est retourne avec un marqueur \texttt{stale=True}. Les donnees en cache restent valides pendant 120~secondes.
+\end{enumerate}
+
+Ce mecanisme garantit la contrainte C4 : un n\oe{}ud inaccessible ne bloque pas le reste du cluster.
+
+% -----------------------------------------------------------------------------
+\subsection{Pont Python $\leftrightarrow$ Rust pour les decisions de politique}
+\label{subsec:pont-python-rust}
+% -----------------------------------------------------------------------------
+
+Le module \texttt{rust\_policy.py} (fichier \texttt{controller/controller/rust\_policy.py}) delegue les evaluations de politique au binaire compile \texttt{omega-policy} (crate \texttt{omega-daemon/src/bin/omega-policy.rs}). L'appel s'effectue via un sous-processus avec echange JSON sur stdin/stdout :
+
+\begin{verbatim}
+Python: json_input = {"thresholds": {...}, "nodes": [...]}
+        result = subprocess.run(["omega-policy", command], input=json_input)
+        candidates = json.loads(result.stdout)
+\end{verbatim}
+
+Ce pont offre deux avantages :
+
+\begin{itemize}
+    \item \textbf{Performance} : l'evaluation de la politique de migration pour 500~VMs beneficie de la vitesse de Rust (pas de GIL, pas de garbage collector).
+    \item \textbf{Fallback} : si le binaire \texttt{omega-policy} est absent, le fallback Python pur assure la continuite.
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\subsection{Moniteur LXC}
+\label{subsec:moniteur-lxc}
+% -----------------------------------------------------------------------------
+
+Le \texttt{LxcMonitor} (fichier \texttt{controller/controller/lxc\_monitor.py}) surveille les conteneurs LXC en plus des VMs QEMU. Il lit les fichiers PSI memoire des cgroups v2 de chaque conteneur pour detecter une pression memoire, sans necessiter d'agent dans le conteneur. Les signaux de pression sont identiques a ceux des VMs et alimentent les memes decisions de migration.
+
+% =============================================================================
+\section{Observabilite et metriques}
+\label{sec:observabilite}
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+\subsection{Metriques Prometheus}
+\label{subsec:metriques-prometheus}
+% -----------------------------------------------------------------------------
+
+Le daemon expose des metriques au format Prometheus sur le endpoint \texttt{GET /control/metrics} (port~9300). Les metriques cles sont :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Metriques Prometheus exposees par le daemon.}
+    \label{tab:metriques-prometheus}
+    \begin{tabular}{p{0.45\linewidth} c p{0.30\linewidth}}
+        \toprule
+        \textbf{Metrique} & \textbf{Type} & \textbf{Description} \\
+        \midrule
+        \texttt{omega\_vcpu\_slots\_total} & gauge & Slots vCPU totaux du n\oe{}ud \\
+        \texttt{omega\_vcpu\_slots\_used} & gauge & Slots vCPU utilises \\
+        \texttt{omega\_vcpu\_slots\_free} & gauge & Slots vCPU disponibles \\
+        \texttt{omega\_vcpu\_steal\_pct} & gauge & Steal time moyen \\
+        \texttt{omega\_gpu\_vram\_total\_mib} & gauge & VRAM GPU totale \\
+        \texttt{omega\_gpu\_vram\_reserved\_mib} & gauge & VRAM GPU reservee \\
+        \texttt{omega\_gpu\_vram\_free\_mib} & gauge & VRAM GPU libre \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Le store expose ses propres metriques via \texttt{STATS\_RESPONSE} (JSON) : \texttt{pages\_stored}, \texttt{put\_count}, \texttt{get\_count}, \texttt{hit\_rate\_pct}, \texttt{active\_connections}.
+
+% -----------------------------------------------------------------------------
+\subsection{Logging structure}
+\label{subsec:logging-structure}
+% -----------------------------------------------------------------------------
+
+Le systeme utilise un logging structure a deux niveaux :
+
+\begin{itemize}
+    \item \textbf{Rust} : la bibliotheque \texttt{tracing} avec \texttt{tracing-subscriber}, configurable via la variable d'environnement \texttt{RUST\_LOG}. Le format est textuel en developpement et JSON en production (\texttt{--log-format json}, fichier \texttt{main.rs}, lignes~452--463).
+    \item \textbf{Python} : la bibliotheque \texttt{structlog} avec format JSON pour l'integration Grafana/ELK.
+\end{itemize}
+
+Chaque entree de log est enrichie des champs \texttt{vm\_id} et \texttt{node\_id}, permettant le filtrage et la correlation cross-composants.
+
+% -----------------------------------------------------------------------------
+\subsection{Signaux de sante attendus}
+\label{subsec:signaux-sante}
+% -----------------------------------------------------------------------------
+
+En fonctionnement normal, les metriques de l'agent doivent satisfaire les invariants suivants (documentes dans \texttt{docs/metrics.md}, lignes~60--65) :
+
+\begin{itemize}
+    \item \texttt{fault\_errors = 0} : toutes les fautes sont servies correctement.
+    \item \texttt{fetch\_zeros = 0} : toutes les pages evincees sont retrouvees dans le store.
+    \item \texttt{fault\_served = fault\_count} : chaque defaut est resolu.
+    \item \texttt{hit\_rate\_pct $>$ 98\,\%} sur les stores : les pages demandees sont presentes.
+    \item \texttt{steal\_pct $<$ 10\,\%} sur les n\oe{}uds : pas de surcharge CPU.
+    \item \texttt{remote\_pct $<$ 60\,\%} par VM : la VM n'a pas trop de pages distantes.
+\end{itemize}
+
+Toute deviation par rapport a ces invariants declenche un avertissement dans les logs et peut initier une action corrective (migration, ajustement de quota, ou alerte operateur).
+
+% =============================================================================
+\section{Synthese : interactions entre sous-systemes}
+\label{sec:synthese}
+% =============================================================================
+
+Les sections precedentes ont decrit chaque sous-systeme de maniere isolee. Cette section finale illustre leur coordination sur un scenario complet de bout en bout, demontrant que le systeme forme un ensemble coherent et non une juxtaposition de composants independants.
+
+\textbf{Scenario : n\oe{}ud A surcharg\'e --- cycle complet de reequilibrage.}
+
+\begin{enumerate}
+    \item \textbf{Detection de la pression memoire.} La fonction \texttt{read\_meminfo()} detecte que l'usage RAM du n\oe{}ud A depasse 85\,\% (\texttt{evict\_threshold\_pct}).
+
+    \item \textbf{Eviction CLOCK.} L'\texttt{EvictionEngine} selectionne les pages froides des VMs locales et les envoie via \texttt{PUT\_PAGE} TCP+TLS aux stores des n\oe{}uds B et C. Le \texttt{QuotaRegistry} verifie, pour chaque page, que le budget distant n'est pas depasse (equation~\ref{eq:check-put}).
+
+    \item \textbf{Ajustement balloon.} Le \texttt{BalloonMonitor} detecte que le guest de la VM~100 n'utilise que 60\,\% de sa RAM. Le \texttt{BalloonManager} gonfle le balloon, reduisant \texttt{balloon\_actual\_mib}. Le quota distant est automatiquement ajuste via l'equation~(\ref{eq:balloon-quota}).
+
+    \item \textbf{Retour de page (FaultBus).} La VM~101 accede a une page evincee. Le handler \texttt{userfaultfd} emet un \texttt{FaultEvent::PageServed} sur le \texttt{FaultBus}. Le \texttt{FaultBusConsumer} calcule que \texttt{remote\_rps} depasse le seuil de 5.0. L'\texttt{AdaptiveInterval} passe en mode accelere (2~secondes).
+
+    \item \textbf{Quota distant atteint.} La VM~102 atteint son \texttt{remote\_budget\_mib}. Le prochain \texttt{PUT\_PAGE} est rejete avec \texttt{QuotaCheck::Exceeded}. L'eviction ne peut plus liberer de RAM pour cette VM.
+
+    \item \textbf{Pression CPU simultanee.} Le \texttt{CgroupCpuMonitor} (1~ms) detecte que la VM~101 est throttl\'ee a 35\,\% (\texttt{throttle\_ratio $>$ THROTTLE\_THRESHOLD}). Le \texttt{VcpuScheduler} tente un hotplug : aucun slot disponible. Decision : \texttt{VcpuDecision::MigrateRequired}.
+
+    \item \textbf{Partage CPU local temporaire.} Avant la migration, le daemon tente le partage CPU local : la VM~100 (idle) passe a \texttt{DONOR\_CPU\_WEIGHT = 50}, la VM~101 passe a \texttt{BOOSTED\_CPU\_WEIGHT = 200}. La saturation persiste.
+
+    \item \textbf{Decision de migration (contr\^oleur Python).} Le \texttt{ResilientCollector} collecte l'etat des trois n\oe{}uds. La \texttt{MigrationPolicy} evalue le score de placement : le n\oe{}ud C a le meilleur score ($r_{\text{RAM}} = 0{,}65$, $r_{\text{vCPU}} = 0{,}70$, $r_{\text{disk}} = 0{,}95$). La decision est : migration live de la VM~101 vers le n\oe{}ud C.
+
+    \item \textbf{Execution de la migration live.} \texttt{MigrationExecutor.spawn()} lance \texttt{qm migrate 101 pve-c --online}. KVM transfere la RAM iterativement (pre-copy). Downtime $< 1$~seconde.
+
+    \item \textbf{Nettoyage post-migration.} Sur le n\oe{}ud A :
+    \begin{itemize}
+        \item \texttt{quota\_registry.record\_delete\_vm(101)} : remet a zero la consommation distante.
+        \item \texttt{vcpu\_scheduler.release\_vm(101)} : libere les slots vCPU.
+        \item \texttt{quota\_registry.remove(101)} : supprime le quota.
+        \item \texttt{gpu\_runtime.release\_vm(101)} : libere le budget VRAM (si applicable).
+        \item \texttt{disk\_io\_scheduler.release\_vm(101)} : libere les poids I/O.
+    \end{itemize}
+    Le n\oe{}ud C enregistre automatiquement la VM~101 dans son \texttt{VcpuScheduler} et \texttt{QuotaRegistry} via le cycle de decouverte du \texttt{VmTracker} (intervalle 15~secondes).
+\end{enumerate}
+
+Ce scenario illustre la chaine complete de reactions : detection $\to$ eviction $\to$ balloon $\to$ FaultBus $\to$ quota $\to$ partage local $\to$ migration $\to$ nettoyage. Chaque sous-systeme intervient dans l'ordre et passe le relais au suivant lorsque ses capacites sont epuisees. La coherence est maintenue par l'etat partage \texttt{Arc<NodeState>} et par les invariants formels (equations~\ref{eq:quota-invariant}, \ref{eq:quota-total}, \ref{eq:check-put}).
+
+\bigskip
+
+Ce chapitre a presente l'analyse detaillee des contraintes et la conception de chaque sous-systeme du projet omega-remote-paging. Le chapitre suivant aborde l'implementation et les resultats experimentaux, en montrant comment ces choix de conception se traduisent en performances mesurables sur un cluster Proxmox reel.

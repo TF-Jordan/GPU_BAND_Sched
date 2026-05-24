@@ -1,0 +1,27 @@
+[build-system]
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name        = "omega-controller"
+version     = "0.1.0"
+description = "Controller de politique de paging distant — cluster omega-remote-paging"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "pydantic>=2.0",
+    "rich>=13.0",
+    "click>=8.1",
+    "structlog>=23.0",
+]
+
+[project.scripts]
+omega-controller = "controller.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["controller*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
