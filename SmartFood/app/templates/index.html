@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block contenu %}
+<section class="hero">
+    <h1>SmartFood</h1>
+    <p class="sous-titre">Optimisation de la livraison et de la production de repas</p>
+    <p class="intro">
+        Ce tableau de bord presente les resultats des quatre problemes d'optimisation
+        du projet : recherche de plus courts chemins, arbre couvrant de poids minimal,
+        ordonnancement de la production et programmation lineaire.
+    </p>
+</section>
+
+<section class="cartes">
+    <a class="carte" href="/dijkstra">
+        <div class="carte-num">1</div>
+        <h2>Plus courts chemins</h2>
+        <p>Algorithme de Dijkstra sur le graphe oriente des livraisons.</p>
+        <div class="carte-stat">
+            Meilleur trajet :
+            <strong>
+                {% set best = dijkstra.comparaison[0] %}
+                {{ best.client }} ({{ best.distance_totale }} km)
+            </strong>
+        </div>
+    </a>
+
+    <a class="carte" href="/kruskal">
+        <div class="carte-num">2</div>
+        <h2>ACPM &mdash; Fibre optique</h2>
+        <p>Arbre couvrant de poids minimal (Kruskal) pour cabler les 10 sites.</p>
+        <div class="carte-stat">
+            Cout du cablage : <strong>{{ kruskal.poids_total }} km</strong>
+        </div>
+    </a>
+
+    <a class="carte" href="/pert">
+        <div class="carte-num">3</div>
+        <h2>Ordonnancement</h2>
+        <p>Methode PERT : dates au plus tot/tard, marges et chemin critique.</p>
+        <div class="carte-stat">
+            Duree du projet : <strong>{{ pert.duree_projet }} min</strong>
+        </div>
+    </a>
+
+    <a class="carte" href="/programmation-lineaire">
+        <div class="carte-num">4</div>
+        <h2>Programmation lineaire</h2>
+        <p>Maximisation de la marge quotidienne sous contraintes de ressources.</p>
+        <div class="carte-stat">
+            Marge optimale : <strong>{{ pl.marge_totale }} &euro;</strong>
+        </div>
+    </a>
+</section>
+
+<section class="resume">
+    <h2>Synthese des resultats</h2>
+    <div class="resume-grille">
+        <div class="resume-bloc">
+            <h3>1. Livraison</h3>
+            <ul>
+                {% for t in dijkstra.comparaison %}
+                <li>
+                    <span class="badge {{ 'badge-ok' if t.atteignable else 'badge-ko' }}">
+                        {{ t.client }}
+                    </span>
+                    {% if t.atteignable %}
+                        {{ t.distance_totale }} km
+                    {% else %}
+                        non atteignable
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        <div class="resume-bloc">
+            <h3>2. Cablage</h3>
+            <p>ACPM : <strong>{{ kruskal.poids_total }} km</strong></p>
+            <p>Etoile depuis E : {{ kruskal.comparaison_etoile.cout_etoile }} km</p>
+            <p class="vert">Economie : {{ kruskal.comparaison_etoile.economie }} km</p>
+        </div>
+        <div class="resume-bloc">
+            <h3>3. Production</h3>
+            <p>Duree : <strong>{{ pert.duree_projet }} min</strong></p>
+            <p>Chemin critique :</p>
+            <p class="mono">{{ pert.chemin_critique | join(" &rarr; ") | safe }}</p>
+        </div>
+        <div class="resume-bloc">
+            <h3>4. Quantites</h3>
+            <p>S = <strong>{{ pl.solution.S }}</strong>,
+               V = <strong>{{ pl.solution.V }}</strong>,
+               G = <strong>{{ pl.solution.G }}</strong></p>
+            <p class="vert">Marge : {{ pl.marge_totale }} &euro;/jour</p>
+        </div>
+    </div>
+</section>
+{% endblock %}

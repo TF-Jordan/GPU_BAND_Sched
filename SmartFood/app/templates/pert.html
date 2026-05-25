@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block contenu %}
+<h1>3. Ordonnancement de la production &mdash; Methode PERT</h1>
+<p class="intro">
+    Calcul des dates au plus tot et au plus tard de chaque tache, des marges,
+    et identification du chemin critique. Aucune contrainte de ressources :
+    seules les precedences s'appliquent.
+</p>
+
+<div class="bandeau-resultat">
+    <div>
+        <span class="label">Duree du projet</span>
+        <span class="valeur">{{ data.duree_projet }} min</span>
+    </div>
+    <div>
+        <span class="label">Debut &mdash; Fin</span>
+        <span class="valeur">{{ data.heure_debut }} &rarr; {{ data.deadline.heure_fin_actuelle }}</span>
+    </div>
+    <div class="{{ 'rouge-bloc' if not data.deadline.respecte else 'vert-bloc' }}">
+        <span class="label">Deadline 9h30</span>
+        <span class="valeur">{{ "respecte" if data.deadline.respecte else "depasse" }}</span>
+    </div>
+</div>
+
+<section class="panneau">
+    <h2>Diagramme de Gantt</h2>
+    <p class="aide">
+        Chaque barre represente une tache positionnee a sa date au plus tot.
+        Les taches du <span class="rouge">chemin critique</span> sont en rouge.
+    </p>
+    <div id="gantt" class="viz viz-gantt"></div>
+    <div class="legende">
+        <span><i class="pastille pastille-critique"></i> Tache critique (marge nulle)</span>
+        <span><i class="pastille pastille-normale"></i> Tache avec marge</span>
+    </div>
+</section>
+
+<section class="panneau">
+    <h2>Reseau des taches (potentiel-taches)</h2>
+    <p class="aide">
+        Chaque sommet affiche <span class="mono">[date au plus tot | date au plus tard]</span>.
+        Le chemin critique est en rouge.
+    </p>
+    <div id="reseau-pert" class="viz"></div>
+</section>
+
+<section class="panneau">
+    <h2>Tableau des dates et marges</h2>
+    <table class="tableau">
+        <thead>
+            <tr>
+                <th>Tache</th><th>Libelle</th><th>Duree</th>
+                <th>Plus tot (debut)</th><th>Plus tot (fin)</th>
+                <th>Plus tard (debut)</th><th>Plus tard (fin)</th>
+                <th>Marge totale</th><th>Marge libre</th><th>Critique</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for t in data.taches %}
+            <tr class="{{ 'ligne-critique' if t.critique else '' }}">
+                <td><strong>{{ t.code }}</strong></td>
+                <td>{{ t.libelle }}</td>
+                <td>{{ t.duree }}</td>
+                <td>{{ t.tot_debut }}</td>
+                <td>{{ t.tot_fin }}</td>
+                <td>{{ t.tard_debut }}</td>
+                <td>{{ t.tard_fin }}</td>
+                <td><strong>{{ t.marge_totale }}</strong></td>
+                <td>{{ t.marge_libre }}</td>
+                <td>{% if t.critique %}<span class="badge badge-critique">OUI</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="note">
+        Chemin critique : <span class="mono rouge">{{ data.chemin_critique | join(" &rarr; ") | safe }}</span>
+        (duree totale = {{ data.duree_projet }} min). Sur ce chemin, toutes les
+        marges totales sont nulles.
+    </p>
+</section>
+
+<div class="grille-2">
+    <section class="panneau">
+        <h2>Impact du deadline a 9h30</h2>
+        <p>{{ data.deadline.commentaire }}</p>
+        {% if not data.deadline.respecte %}
+        <p class="note">
+            Reduction necessaire : <strong>{{ data.deadline.reduction_necessaire }} min</strong>.
+            Comme seules les taches du chemin critique influent sur la duree totale,
+            la reduction (compression / heures supplementaires) doit porter sur l'une
+            d'elles &mdash; en priorite P2 (Cuisson, 40 min), la plus longue.
+        </p>
+        {% endif %}
+    </section>
+    <section class="panneau">
+        <h2>Impact d'un second livreur</h2>
+        <p>{{ data.second_livreur.constat }}</p>
+        <p class="note">{{ data.second_livreur.impact }}</p>
+    </section>
+</div>
+
+<script id="data-pert" type="application/json">{{ data | tojson | safe }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/pert.js"></script>
+{% endblock %}

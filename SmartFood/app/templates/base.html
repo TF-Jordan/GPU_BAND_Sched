@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartFood &middot; {{ titre }}</title>
+
+    <!-- Librairies de visualisation (chargees depuis CDN) -->
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://unpkg.com/vis-timeline@7.7.3/standalone/umd/vis-timeline-graph2d.min.js"></script>
+    <link href="https://unpkg.com/vis-timeline@7.7.3/styles/vis-timeline-graph2d.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <span class="logo">SF</span>
+            <span>SmartFood</span>
+        </div>
+        <nav class="nav">
+            <a href="/" class="{{ 'actif' if titre == 'Accueil' else '' }}">Accueil</a>
+            <a href="/dijkstra" class="{{ 'actif' if 'Dijkstra' in titre else '' }}">1. Plus courts chemins</a>
+            <a href="/kruskal" class="{{ 'actif' if 'Kruskal' in titre else '' }}">2. ACPM</a>
+            <a href="/pert" class="{{ 'actif' if 'PERT' in titre else '' }}">3. Ordonnancement</a>
+            <a href="/programmation-lineaire" class="{{ 'actif' if 'lineaire' in titre else '' }}">4. Prog. lineaire</a>
+        </nav>
+    </header>
+
+    <main class="content">
+        {% block contenu %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <span>SmartFood &mdash; Optimisation de la livraison et production de repas</span>
+        <span><a href="/docs">Documentation API</a></span>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

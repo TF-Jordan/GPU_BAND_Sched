@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block contenu %}
+<h1>1. Plus courts chemins &mdash; Algorithme de Dijkstra</h1>
+<p class="intro">
+    Pour chaque client, on cherche le plus court trajet
+    <span class="mono">E &rarr; cuisine &rarr; client &rarr; Labo</span>
+    dans le graphe oriente des distances. L'algorithme de Dijkstra est utilise
+    car toutes les valuations sont positives.
+</p>
+
+<div class="grille-2">
+    <section class="panneau">
+        <h2>Graphe oriente des livraisons</h2>
+        <p class="aide">
+            Cliquez sur un client dans la liste pour surligner son plus court trajet.
+        </p>
+        <div id="graphe-dijkstra" class="viz"></div>
+        <div class="legende">
+            <span><i class="pastille pastille-e"></i> Entrepot</span>
+            <span><i class="pastille pastille-cuisine"></i> Cuisine</span>
+            <span><i class="pastille pastille-client"></i> Client</span>
+            <span><i class="pastille pastille-labo"></i> Labo</span>
+        </div>
+    </section>
+
+    <section class="panneau">
+        <h2>Trajets optimaux par client</h2>
+        <div class="boutons-clients" id="boutons-clients"></div>
+        <table class="tableau">
+            <thead>
+                <tr><th>Client</th><th>Cuisine</th><th>Trajet</th><th>Distance</th></tr>
+            </thead>
+            <tbody>
+                {% for t in data.comparaison %}
+                <tr class="{{ 'ligne-ko' if not t.atteignable else '' }}">
+                    <td><strong>{{ t.client }}</strong></td>
+                    <td>{{ t.cuisine if t.cuisine else "&mdash;" | safe }}</td>
+                    <td class="mono">
+                        {% if t.atteignable %}
+                            {{ t.chemin_complet | join(" &rarr; ") | safe }}
+                        {% else %}
+                            <span class="ko">non atteignable</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if t.atteignable %}<strong>{{ t.distance_totale }} km</strong>
+                        {% else %}&infin;{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="note">
+            Note : les clients reposant sur les cuisines C3 et C4 ne sont pas
+            atteignables depuis E, car aucun arc n'entre dans C3 ni C4 dans le
+            graphe oriente fourni (seul l'arc C4 &rarr; E existe).
+        </p>
+    </section>
+</div>
+
+<section class="panneau">
+    <h2>Tableau d'iterations de Dijkstra</h2>
+    <p class="aide">
+        A chaque etape : on marque le sommet non marque de distance minimale (M),
+        puis on met a jour ses successeurs. <span class="mono">d(s)</span> = distance
+        estimee depuis E ; <span class="mono">P(s)</span> = pere (predecesseur).
+    </p>
+    <div class="table-scroll">
+        <table class="tableau tableau-compact">
+            <thead>
+                <tr>
+                    <th>Etape</th>
+                    <th>Sommet marque</th>
+                    {% for s in data.sommets %}<th>d({{ s }})</th>{% endfor %}
+                    {% for s in data.sommets %}<th>P({{ s }})</th>{% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for it in data.iterations %}
+                <tr>
+                    <td>{{ loop.index0 if loop.index0 > 0 else "init" }}</td>
+                    <td><strong>{{ it.sommet_marque if it.sommet_marque else "&mdash;" | safe }}</strong></td>
+                    {% for s in data.sommets %}
+                    <td>{{ it.distances[s] if it.distances[s] is not none else "&infin;" | safe }}</td>
+                    {% endfor %}
+                    {% for s in data.sommets %}
+                    <td>{{ it.peres[s] if it.peres[s] else "&middot;" | safe }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<script id="data-dijkstra" type="application/json">{{ data | tojson | safe }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/dijkstra.js"></script>
+{% endblock %}

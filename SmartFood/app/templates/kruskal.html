@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block contenu %}
+<h1>2. ACPM &mdash; Cablage fibre optique (Kruskal)</h1>
+<p class="intro">
+    On relie les 10 sites (E, C1&ndash;C4, A&ndash;F) par un cable de longueur totale
+    minimale. L'algorithme de Kruskal trie les aretes par poids croissant et ajoute
+    chaque arete si elle ne cree pas de cycle (test par Union-Find), jusqu'a obtenir
+    n&minus;1 = 9 aretes.
+</p>
+
+<div class="grille-2">
+    <section class="panneau">
+        <h2>Arbre couvrant de poids minimal</h2>
+        <p class="aide">
+            En vert : les 9 aretes retenues. En gris clair : les autres liaisons possibles.
+        </p>
+        <div id="graphe-kruskal" class="viz"></div>
+        <div class="bandeau-resultat">
+            <div>
+                <span class="label">Cout du cablage (ACPM)</span>
+                <span class="valeur">{{ data.poids_total }} km</span>
+            </div>
+            <div>
+                <span class="label">Topologie en etoile depuis E</span>
+                <span class="valeur">{{ data.comparaison_etoile.cout_etoile }} km</span>
+            </div>
+            <div class="vert-bloc">
+                <span class="label">Economie de l'ACPM</span>
+                <span class="valeur">{{ data.comparaison_etoile.economie }} km</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="panneau">
+        <h2>Aretes selectionnees</h2>
+        <table class="tableau">
+            <thead><tr><th>#</th><th>Arete</th><th>Poids (km)</th></tr></thead>
+            <tbody>
+                {% for a in data.arbre %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td class="mono">{{ a.from }} &mdash; {{ a.to }}</td>
+                    <td>{{ a.poids }}</td>
+                </tr>
+                {% endfor %}
+                <tr class="ligne-total">
+                    <td colspan="2"><strong>Longueur totale</strong></td>
+                    <td><strong>{{ data.poids_total }} km</strong></td>
+                </tr>
+            </tbody>
+        </table>
+        <p class="note">
+            Interet de l'ACPM : avec {{ data.poids_total }} km de cable contre
+            {{ data.comparaison_etoile.cout_etoile }} km pour une etoile depuis E,
+            l'arbre couvrant economise
+            <strong>{{ data.comparaison_etoile.economie }} km</strong>.
+        </p>
+    </section>
+</div>
+
+<section class="panneau">
+    <h2>Deroulement de l'algorithme de Kruskal</h2>
+    <p class="aide">
+        Aretes parcourues par poids croissant. Une arete est rejetee si ses deux
+        extremites sont deja dans la meme composante (cela creerait un cycle).
+    </p>
+    <div class="table-scroll">
+        <table class="tableau tableau-compact">
+            <thead>
+                <tr>
+                    <th>Etape</th><th>Arete</th><th>Poids</th>
+                    <th>Decision</th><th>Aretes dans l'arbre</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in data.etapes %}
+                <tr class="{{ 'ligne-ok' if e.acceptee else 'ligne-rejet' }}">
+                    <td>{{ loop.index }}</td>
+                    <td class="mono">{{ e.arete }}</td>
+                    <td>{{ e.poids }}</td>
+                    <td>
+                        {% if e.acceptee %}
+                            <span class="badge badge-ok">acceptee</span>
+                        {% else %}
+                            <span class="badge badge-ko">rejetee (cycle)</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ e.nb_aretes_arbre }} / 9</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<script id="data-kruskal" type="application/json">{{ data | tojson | safe }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/kruskal.js"></script>
+{% endblock %}

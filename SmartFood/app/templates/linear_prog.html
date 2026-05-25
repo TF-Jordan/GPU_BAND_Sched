@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block contenu %}
+<h1>4. Optimisation des quantites &mdash; Programmation lineaire</h1>
+<p class="intro">
+    On determine combien de repas standard (S), vegetariens (V) et sans gluten (G)
+    produire chaque jour pour maximiser la marge totale, sous contraintes de
+    ressources et contraintes commerciales.
+</p>
+
+<div class="grille-2">
+    <section class="panneau">
+        <h2>Formulation du programme lineaire</h2>
+        <div class="formulation">
+            <p class="objectif">Maximiser&nbsp; Z = 3&nbsp;S + 4&nbsp;V + 5&nbsp;G</p>
+            <p class="sous-contrainte">sous contraintes :</p>
+            <ul class="contraintes">
+                {% for c in data.formulation.contraintes_ressources %}
+                <li><span class="mono">{{ c.expression }}</span>
+                    <span class="ctr-nom">({{ c.nom }})</span></li>
+                {% endfor %}
+                {% for b in data.formulation.bornes %}
+                <li><span class="mono">{{ b }}</span></li>
+                {% endfor %}
+            </ul>
+        </div>
+    </section>
+
+    <section class="panneau">
+        <h2>Solution optimale</h2>
+        <div class="solution-grille">
+            <div class="sol-bloc sol-s">
+                <span class="sol-var">S</span>
+                <span class="sol-val">{{ data.solution.S }}</span>
+                <span class="sol-lib">standard</span>
+            </div>
+            <div class="sol-bloc sol-v">
+                <span class="sol-var">V</span>
+                <span class="sol-val">{{ data.solution.V }}</span>
+                <span class="sol-lib">vegetarien</span>
+            </div>
+            <div class="sol-bloc sol-g">
+                <span class="sol-var">G</span>
+                <span class="sol-val">{{ data.solution.G }}</span>
+                <span class="sol-lib">sans gluten</span>
+            </div>
+        </div>
+        <div class="bandeau-resultat">
+            <div class="vert-bloc">
+                <span class="label">Marge totale maximale</span>
+                <span class="valeur">{{ data.marge_totale }} &euro; / jour</span>
+            </div>
+            <div>
+                <span class="label">Total repas produits</span>
+                <span class="valeur">{{ data.total_repas }} / {{ data.total_max }}</span>
+            </div>
+        </div>
+    </section>
+</div>
+
+<div class="grille-2">
+    <section class="panneau">
+        <h2>Quantites produites</h2>
+        <div class="viz-chart"><canvas id="chart-quantites"></canvas></div>
+    </section>
+    <section class="panneau">
+        <h2>Utilisation des ressources</h2>
+        <div class="viz-chart"><canvas id="chart-ressources"></canvas></div>
+    </section>
+</div>
+
+<section class="panneau">
+    <h2>Analyse des ressources (contraintes actives)</h2>
+    <table class="tableau">
+        <thead>
+            <tr><th>Ressource</th><th>Consomme</th><th>Disponible</th>
+                <th>Reste</th><th>Taux</th><th>Statut</th></tr>
+        </thead>
+        <tbody>
+            {% for u in data.utilisation_ressources %}
+            <tr class="{{ 'ligne-critique' if u.sature else '' }}">
+                <td>{{ u.ressource }}</td>
+                <td>{{ u.consomme }}</td>
+                <td>{{ u.disponible }}</td>
+                <td>{{ u.reste }}</td>
+                <td>{{ u.taux }}%</td>
+                <td>
+                    {% if u.sature %}
+                        <span class="badge badge-critique">saturee</span>
+                    {% else %}
+                        <span class="badge badge-ok">disponible</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="note">
+        Les ressources <strong>saturees</strong> (taux 100&nbsp;%) sont les contraintes
+        actives : ce sont elles qui limitent la production. Augmenter leur disponibilite
+        permettrait d'accroitre la marge.
+    </p>
+</section>
+
+<script id="data-pl" type="application/json">{{ data | tojson | safe }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/linear_prog.js"></script>
+{% endblock %}
