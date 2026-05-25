@@ -232,6 +232,137 @@ h2 { font-size: 1.2rem; margin: 0 0 14px; }
 .sol-val { display: block; font-size: 2rem; font-weight: 800; }
 .sol-lib { display: block; font-size: .78rem; opacity: .9; }
 
+/* ---- Methode du simplexe ---- */
+.simplex-section h3 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--bleu); }
+.simplex-bloc-info {
+    background: var(--fond);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 18px;
+}
+.simplex-bloc-info h3 { margin-top: 0; }
+.simplex-subst {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 1rem; margin: 10px 0;
+    color: var(--bleu);
+}
+.simplex-objectif-shift {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: .95rem; margin: 8px 0;
+    color: var(--vert);
+    font-weight: 600;
+}
+
+/* Iteration container */
+.simplex-it {
+    border: 1px solid var(--bordure);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 20px;
+    background: var(--carte);
+}
+.it-optimal {
+    border-left: 4px solid var(--vert);
+    background: #f1f8f1;
+}
+.simplex-it-header {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+}
+.simplex-it-num {
+    font-weight: 700; font-size: 1rem; color: var(--texte);
+}
+.simplex-comment {
+    background: #fffde7;
+    border-left: 3px solid var(--orange);
+    border-radius: 0 6px 6px 0;
+    padding: 8px 12px;
+    font-size: .88rem;
+    margin: 0 0 12px;
+}
+.it-optimal .simplex-comment {
+    background: #e8f5e9;
+    border-left-color: var(--vert);
+}
+
+/* Tableau du simplexe */
+.simplex-table { font-size: .8rem; border-collapse: collapse; min-width: 700px; }
+.simplex-table th, .simplex-table td {
+    padding: 5px 8px; text-align: center;
+    border: 1px solid var(--bordure);
+}
+.simplex-table .col-base { text-align: left; font-weight: 600; min-width: 50px; }
+.simplex-table .col-cb { min-width: 38px; font-weight: 600; }
+.simplex-table .col-b { font-weight: 700; background: #f9fbe7; }
+.simplex-table .col-ratio { background: #fff8e1; font-size: .78rem; }
+.simplex-table .b-val { font-weight: 700; }
+.simplex-table .var-b { color: var(--bleu); font-style: italic; }
+
+/* En-tete */
+.simplex-table .cj-header th { background: #e3f2fd; font-size: .75rem; }
+.simplex-table .col-names th { background: #eceff1; font-weight: 700; font-size: .82rem; }
+
+/* Colonne variable entrante */
+.simplex-table .col-ent { background: rgba(66, 165, 245, .15); }
+.simplex-table .cj-header .col-ent { background: rgba(66, 165, 245, .35); }
+
+/* Ligne variable sortante */
+.simplex-table .row-sort td { background: rgba(245, 124, 0, .12); }
+.simplex-table .row-sort .col-ent { background: rgba(245, 124, 0, .25); }
+
+/* Cellule pivot (intersection) */
+.simplex-table .cell-pivot {
+    background: var(--orange) !important;
+    color: #fff;
+    font-weight: 800;
+    font-size: .9rem;
+}
+
+/* Lignes z_j et d_j */
+.simplex-table .zj-row td { background: #e8eaf6; font-style: italic; font-size: .78rem; }
+.simplex-table .dj-row td { background: #fce4ec; font-style: italic; font-size: .78rem; }
+.dj-pos { color: var(--vert); font-weight: 800; }
+.dj-neg { color: var(--rouge); }
+.dj-zero { color: #90a4ae; }
+
+/* Rapport minimum (surligne) */
+.ratio-min { font-weight: 800; color: var(--orange); background: rgba(245, 124, 0, .15) !important; }
+
+/* Encart pivot */
+.simplex-pivot-info {
+    margin-top: 10px;
+    font-size: .88rem;
+    color: #455a64;
+    background: #f5f5f5;
+    padding: 8px 12px;
+    border-radius: 6px;
+}
+.badge-ent {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    background: var(--bleu-clair); color: #fff; font-weight: 700; font-size: .82rem;
+}
+.badge-sort {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    background: var(--orange); color: #fff; font-weight: 700; font-size: .82rem;
+}
+
+/* Solution finale */
+.simplex-sol-finale {
+    background: #e8f5e9;
+    border: 1px solid #a5d6a7;
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-top: 20px;
+}
+.simplex-sol-finale h3 { color: var(--vert); margin-top: 0; }
+.simplex-z-final {
+    margin-top: 14px;
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--vert);
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+
 /* ---- Footer ---- */
 .footer {
     max-width: 1180px; margin: 0 auto; padding: 20px 24px;

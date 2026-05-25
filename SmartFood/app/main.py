@@ -31,6 +31,26 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 
+def _num(v):
+    """Filtre Jinja2 : formate un nombre en supprimant les zeros superflus."""
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return str(v)
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if abs(f) < 1e-9:
+        return "0"
+    if f == int(f) and abs(f) < 1e15:
+        return str(int(f))
+    return f"{f:g}"
+
+
+templates.env.filters["num"] = _num
+
+
 # ---------------------------------------------------------------------------
 # Pages (rendu Jinja2)
 # ---------------------------------------------------------------------------

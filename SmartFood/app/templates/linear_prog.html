@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 
 {% block contenu %}
-<h1>4. Optimisation des quantites &mdash; Programmation lineaire</h1>
+<h1>4. Optimisation des quantites &mdash; Programmation lin&eacute;aire</h1>
 <p class="intro">
-    On determine combien de repas standard (S), vegetariens (V) et sans gluten (G)
+    On d&eacute;termine combien de repas standard (S), v&eacute;g&eacute;tariens (V) et sans gluten (G)
     produire chaque jour pour maximiser la marge totale, sous contraintes de
     ressources et contraintes commerciales.
 </p>
 
 <div class="grille-2">
     <section class="panneau">
-        <h2>Formulation du programme lineaire</h2>
+        <h2>Formulation du programme lin&eacute;aire</h2>
         <div class="formulation">
             <p class="objectif">Maximiser&nbsp; Z = 3&nbsp;S + 4&nbsp;V + 5&nbsp;G</p>
             <p class="sous-contrainte">sous contraintes :</p>
@@ -37,7 +37,7 @@
             <div class="sol-bloc sol-v">
                 <span class="sol-var">V</span>
                 <span class="sol-val">{{ data.solution.V }}</span>
-                <span class="sol-lib">vegetarien</span>
+                <span class="sol-lib">v&eacute;g&eacute;tarien</span>
             </div>
             <div class="sol-bloc sol-g">
                 <span class="sol-var">G</span>
@@ -60,7 +60,7 @@
 
 <div class="grille-2">
     <section class="panneau">
-        <h2>Quantites produites</h2>
+        <h2>Quantit&eacute;s produites</h2>
         <div class="viz-chart"><canvas id="chart-quantites"></canvas></div>
     </section>
     <section class="panneau">
@@ -73,7 +73,7 @@
     <h2>Analyse des ressources (contraintes actives)</h2>
     <table class="tableau">
         <thead>
-            <tr><th>Ressource</th><th>Consomme</th><th>Disponible</th>
+            <tr><th>Ressource</th><th>Consomm&eacute;</th><th>Disponible</th>
                 <th>Reste</th><th>Taux</th><th>Statut</th></tr>
         </thead>
         <tbody>
@@ -86,7 +86,7 @@
                 <td>{{ u.taux }}%</td>
                 <td>
                     {% if u.sature %}
-                        <span class="badge badge-critique">saturee</span>
+                        <span class="badge badge-critique">satur&eacute;e</span>
                     {% else %}
                         <span class="badge badge-ok">disponible</span>
                     {% endif %}
@@ -96,10 +96,230 @@
         </tbody>
     </table>
     <p class="note">
-        Les ressources <strong>saturees</strong> (taux 100&nbsp;%) sont les contraintes
-        actives : ce sont elles qui limitent la production. Augmenter leur disponibilite
-        permettrait d'accroitre la marge.
+        Les ressources <strong>satur&eacute;es</strong> (taux 100&nbsp;%) sont les contraintes
+        actives : ce sont elles qui limitent la production. Augmenter leur disponibilit&eacute;
+        permettrait d'accro&icirc;tre la marge.
     </p>
+</section>
+
+<!-- ============================================================
+     METHODE DU SIMPLEXE (resolution detaillee, tableau par tableau)
+     ============================================================ -->
+<section class="panneau simplex-section">
+    <h2>R&eacute;solution par la m&eacute;thode du simplexe</h2>
+
+    <!-- Changement de variable -->
+    <div class="simplex-bloc-info">
+        <h3>1. Changement de variable (gestion des bornes inf&eacute;rieures)</h3>
+        <p>
+            Les contraintes de production minimale (S&nbsp;&ge;&nbsp;20, V&nbsp;&ge;&nbsp;20,
+            G&nbsp;&ge;&nbsp;20) sont int&eacute;gr&eacute;es par substitution :
+        </p>
+        <div class="simplex-subst">
+            <span>S&prime; = S &minus; 20</span>
+            <span>V&prime; = V &minus; 20</span>
+            <span>G&prime; = G &minus; 20</span>
+        </div>
+        <p>
+            Avec S&prime;, V&prime;, G&prime;&nbsp;&ge;&nbsp;0, la fonction objectif devient :
+        </p>
+        <p class="simplex-objectif-shift">
+            Z = 3(S&prime;+20) + 4(V&prime;+20) + 5(G&prime;+20)
+            &nbsp;=&nbsp; 3S&prime; + 4V&prime; + 5G&prime; + {{ data.simplex.constante_shift }}
+        </p>
+        <p>On maximise donc <strong>Z&prime; = 3S&prime; + 4V&prime; + 5G&prime;</strong>
+           et on ajoutera la constante {{ data.simplex.constante_shift }}&nbsp;&euro; &agrave; la fin.</p>
+        <p>Les bornes sup&eacute;rieures apr&egrave;s substitution :
+           S&prime;&nbsp;&le;&nbsp;80 &nbsp;|&nbsp;
+           V&prime;&nbsp;&le;&nbsp;60 &nbsp;|&nbsp;
+           G&prime;&nbsp;&le;&nbsp;30.</p>
+    </div>
+
+    <!-- Forme standard -->
+    <div class="simplex-bloc-info">
+        <h3>2. Forme standard &mdash; introduction des variables d&rsquo;&eacute;cart</h3>
+        <p>
+            On transforme chaque in&eacute;galit&eacute; en &eacute;galit&eacute; en ajoutant
+            une variable d&rsquo;&eacute;cart positive. On obtient 9 contraintes
+            (5&nbsp;ressources + total + 3&nbsp;bornes sup&eacute;rieures) :
+        </p>
+        <div class="table-scroll">
+        <table class="tableau tableau-compact">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Contrainte en forme standard</th>
+                    <th>&eacute;cart</th>
+                    <th>Valeur initiale</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ctr in data.simplex.contraintes_std %}
+                <tr>
+                    <td><strong>{{ ctr.num }}</strong></td>
+                    <td class="mono">{{ ctr.libelle }}</td>
+                    <td>{{ ctr.ecart }}</td>
+                    <td>{{ ctr.b }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        <p class="note">
+            La <strong>solution de base initiale</strong> est S&prime;=V&prime;=G&prime;=0,
+            toutes les variables d&rsquo;&eacute;cart &eacute;gales &agrave; leur second membre.
+            La base est {e1, e2, e3, e4, e5, e6, e7, e8, e9} et Z&prime;&nbsp;=&nbsp;0.
+        </p>
+    </div>
+
+    <!-- Iterations du simplexe -->
+    <h3>3. Tableaux du simplexe &mdash; it&eacute;rations</h3>
+
+    {% for it in data.simplex.iterations %}
+    <div class="simplex-it {{ 'it-optimal' if it.optimal else '' }}">
+
+        <div class="simplex-it-header">
+            <span class="simplex-it-num">
+                {% if it.numero == 0 %}
+                    Tableau initial (it&eacute;ration 0)
+                {% elif it.optimal %}
+                    Tableau {{ it.numero }} &mdash; Solution optimale &#10003;
+                {% else %}
+                    Tableau {{ it.numero }}
+                {% endif %}
+            </span>
+        </div>
+
+        <p class="simplex-comment">{{ it.commentaire }}</p>
+
+        <div class="table-scroll">
+        <table class="tableau tableau-compact simplex-table">
+            <!-- Ligne des c_j -->
+            <thead>
+                <tr class="cj-header">
+                    <th class="col-base">Base</th>
+                    <th class="col-cb">c<sub>B</sub></th>
+                    {% for col in data.simplex.noms_cols %}
+                    {% set ci = loop.index0 %}
+                    <th class="{{ 'col-ent' if (not it.optimal and ci == it.j_ent) else '' }}">
+                        c<sub>j</sub>&nbsp;=&nbsp;{{ it.c_j[ci] | num }}
+                    </th>
+                    {% endfor %}
+                    <th class="col-b">b</th>
+                    {% if not it.optimal %}<th class="col-ratio">Rapport</th>{% endif %}
+                </tr>
+                <tr class="col-names">
+                    <th class="col-base">&nbsp;</th>
+                    <th class="col-cb">&nbsp;</th>
+                    {% for col in data.simplex.noms_cols %}
+                    {% set ci = loop.index0 %}
+                    <th class="{{ 'col-ent' if (not it.optimal and ci == it.j_ent) else '' }}">{{ col }}</th>
+                    {% endfor %}
+                    <th class="col-b">&nbsp;</th>
+                    {% if not it.optimal %}<th class="col-ratio">&nbsp;</th>{% endif %}
+                </tr>
+            </thead>
+
+            <!-- Lignes de la base -->
+            <tbody>
+                {% for ligne in it.lignes %}
+                {% set ri = loop.index0 %}
+                <tr class="{{ 'row-sort' if (not it.optimal and ri == it.i_sort) else '' }}">
+                    <td class="col-base var-b">{{ ligne.var }}</td>
+                    <td class="col-cb">{{ ligne.c_b | num }}</td>
+                    {% for coef in ligne.coeffs %}
+                    {% set ci = loop.index0 %}
+                    <td class="{{ 'col-ent' if (not it.optimal and ci == it.j_ent) else '' }}{{ ' cell-pivot' if (not it.optimal and ri == it.i_sort and ci == it.j_ent) else '' }}">
+                        {{ coef | num }}
+                    </td>
+                    {% endfor %}
+                    <td class="col-b b-val">{{ ligne.b | num }}</td>
+                    {% if not it.optimal %}
+                    <td class="col-ratio ratio-val {{ 'ratio-min' if it.ratios[ri] is not none and it.ratios[ri] == it.ratios[it.i_sort] else '' }}">
+                        {{ it.ratios[ri] | num if it.ratios[ri] is not none else '&mdash;' }}
+                    </td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+
+            <!-- Lignes z_j et d_j -->
+            <tfoot>
+                <tr class="zj-row">
+                    <td class="col-base" colspan="2"><em>z<sub>j</sub></em></td>
+                    {% for z in it.z_j %}
+                    <td>{{ z | num }}</td>
+                    {% endfor %}
+                    <td class="col-b"><em>Z&prime;&nbsp;=&nbsp;{{ it.z_val | num }}</em></td>
+                    {% if not it.optimal %}<td></td>{% endif %}
+                </tr>
+                <tr class="dj-row">
+                    <td class="col-base" colspan="2"><em>d<sub>j</sub> = c<sub>j</sub> &minus; z<sub>j</sub></em></td>
+                    {% for d in it.d_j %}
+                    {% set ci = loop.index0 %}
+                    <td class="{{ 'col-ent' if (not it.optimal and ci == it.j_ent) else '' }} {{ 'dj-pos' if d > 0 else ('dj-neg' if d < 0 else 'dj-zero') }}">
+                        {{ d | num }}
+                    </td>
+                    {% endfor %}
+                    <td class="col-b"></td>
+                    {% if not it.optimal %}<td></td>{% endif %}
+                </tr>
+            </tfoot>
+        </table>
+        </div>
+
+        {% if not it.optimal %}
+        <div class="simplex-pivot-info">
+            &#8594; Variable <strong>entrante</strong> :
+            <span class="badge-ent">{{ it.var_entrante }}</span>
+            &nbsp;(d<sub>j</sub> max = {{ it.d_j[it.j_ent] | num }})
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            Variable <strong>sortante</strong> :
+            <span class="badge-sort">{{ it.var_sortante }}</span>
+            &nbsp;(rapport min = {{ it.ratios[it.i_sort] | num }})
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            &Eacute;l&eacute;ment pivot : <strong>{{ it.pivot | num }}</strong>
+        </div>
+        {% endif %}
+
+    </div>
+    {% endfor %}
+
+    <!-- Solution finale : retour aux variables originales -->
+    <div class="simplex-sol-finale">
+        <h3>4. Retour aux variables originales</h3>
+        <table class="tableau" style="max-width:560px">
+            <thead>
+                <tr><th>Variable d&eacute;cision</th><th>Valeur optimale (shift&eacute;e)</th><th>Calcul</th><th>Valeur finale</th></tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>S</td>
+                    <td>S&prime; = {{ data.simplex.solution_shiftee["S'"] }}</td>
+                    <td>S&prime; + 20</td>
+                    <td><strong>S = {{ data.solution.S }}</strong></td>
+                </tr>
+                <tr>
+                    <td>V</td>
+                    <td>V&prime; = {{ data.simplex.solution_shiftee["V'"] }}</td>
+                    <td>V&prime; + 20</td>
+                    <td><strong>V = {{ data.solution.V }}</strong></td>
+                </tr>
+                <tr>
+                    <td>G</td>
+                    <td>G&prime; = {{ data.simplex.solution_shiftee["G'"] }}</td>
+                    <td>G&prime; + 20</td>
+                    <td><strong>G = {{ data.solution.G }}</strong></td>
+                </tr>
+            </tbody>
+        </table>
+        <p class="simplex-z-final">
+            Z = 3 &times; {{ data.solution.S }} + 4 &times; {{ data.solution.V }}
+            + 5 &times; {{ data.solution.G }}
+            &nbsp;=&nbsp; <strong>{{ data.marge_totale }} &euro;</strong>
+        </p>
+    </div>
+
 </section>
 
 <script id="data-pl" type="application/json">{{ data | tojson | safe }}</script>
