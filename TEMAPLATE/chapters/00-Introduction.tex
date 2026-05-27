@@ -1,0 +1,92 @@
+% =============================================================================
+% INTRODUCTION GÉNÉRALE
+% =============================================================================
+\chapter*{Introduction générale}
+\addcontentsline{toc}{chapter}{Introduction générale}
+\markboth{\textit{Introduction générale}}{\textit{Introduction générale}}
+
+\section*{Contexte : le projet \emph{GRID ONE}}
+
+Au sein de l'\acrshort{enspy}, un constat récurrent motive le projet collectif \emph{GRID ONE} dont s'inspire le présent mémoire. Un étudiant de cinquième année --- pris en figure emblématique sous le prénom de \emph{Karlos} dans la présentation fondatrice du projet --- dispose, pour mener à bien ses projets de fin d'études en intelligence artificielle, d'un ordinateur portable de bureautique équipé d'un processeur \texttt{Intel Core~i3-8130U} (deux cœurs, quatre fils d'exécution), de quatre giga-octets de mémoire vive et d'une carte graphique intégrée \texttt{Intel UHD Graphics~620}. Avec cette configuration, entraîner un modèle de langage de taille même modeste relève de l'impossibilité technique, tandis que la location de temps de calcul sur le \emph{cloud} public reste financièrement hors de portée. Le coût d'opportunité est élevé : projets repoussés, performances dégradées dans les unités d'enseignement \emph{Systèmes Multi-Agents} et \emph{Systèmes Embarqués}, et, à plus long terme, érosion de la compétitivité scientifique de l'établissement.
+
+Or, dans les locaux de l'ENSPY se trouvent paradoxalement des dizaines de machines fonctionnelles partiellement abandonnées : tours, serveurs déclassés, équipements de salles serveurs reconvertibles. C'est de l'observation de ce paradoxe --- ressources sous-utilisées d'un côté, besoins non couverts de l'autre --- qu'est née l'idée fondatrice de \emph{GRID ONE} : agréger les machines existantes en un cluster commun, en exposer les capacités via un portail libre-service, et permettre aux étudiants, enseignants et chercheurs de réserver à la demande des machines virtuelles correctement dimensionnées pour leurs travaux.
+
+\emph{GRID ONE} s'articule autour de quatre équipes complémentaires, dont les missions ont été définies en amont par les ingénieurs porteurs du projet :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{ATLAS} (\emph{IronGrid}) --- infrastructure physique et supervision : assemblage du cluster Proxmox~VE avec stockage Ceph en haute disponibilité, supervision IoT de la salle serveur (température, humidité, onduleurs), monitoring Prometheus/Grafana ;
+    \item \textbf{OMEGA} (\emph{FusionCore}) --- optimisation du substrat de virtualisation : mutualisation des ressources processeur, mémoire et accélérateurs graphiques ; suppression des verrouillages imposés par défaut par Proxmox~VE ; production d'une bibliothèque de dix images de systèmes d'exploitation préconfigurés pour différents profils métier ;
+    \item \textbf{SIGMA} (\emph{Horizon}) --- portail web et automatisation : interface intuitive de réservation, opérations CRUD sur les machines virtuelles via l'API REST de Proxmox, injection automatisée des clés \acrshort{ssh}, console VNC intégrée ;
+    \item \textbf{ORION} (\emph{Parallax}) --- calcul distribué : exposition de frameworks de parallélisation (MPI/OpenMPI, Ray, Dask), benchmarks de validation, plateforme de soumission de jobs.
+\end{itemize}
+
+\textbf{Le présent mémoire porte exclusivement sur la mission de l'équipe OMEGA}, et plus précisément sur son cœur logiciel \emph{omega-remote-paging}, alias \emph{FusionCore}, dont l'objectif est de transformer un cluster Proxmox~VE configuré par défaut en un pool de ressources mutualisées. Les autres composants de \emph{GRID ONE} (infrastructure physique, portail, calcul distribué) ne sont mentionnés que dans la mesure où ils constituent le terrain d'opération et les consommateurs naturels du système conçu ici.
+
+\section*{Problématique : les quatre verrous de Proxmox~VE par défaut}
+
+\emph{Proxmox~VE} est un hyperviseur de niveau professionnel qui combine \acrshort{kvm} pour les machines virtuelles et \emph{LXC} pour les conteneurs au sein d'une interface unifiée et d'un cluster à quorum (Corosync). Dans sa configuration par défaut, il est pleinement opérationnel pour des charges modestes mais devient rapidement contre-productif lorsqu'il s'agit de mutualiser un cluster aux nœuds hétérogènes, comme celui que vise \emph{GRID ONE}. Quatre verrous structurels limitent l'exploitation effective des ressources matérielles disponibles :
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{La mémoire est cloisonnée par nœud.} L'admission d'une nouvelle \acrshort{vm} repose sur la mémoire libre du nœud cible et non sur la somme cluster-wide. Une situation où le nœud~A est à 90~\% d'occupation tandis que les nœuds~B et~C affichent 30~\% conduit Proxmox à refuser toute nouvelle \acrshort{vm} sur~A, alors que collectivement le cluster dispose de plus de 60~\% de marge.
+    \item \textbf{Les processeurs virtuels sont statiques.} Le nombre de \acrshort{vcpu} alloués à une \acrshort{vm} est défini à sa création et ne s'adapte pas dynamiquement à la charge réelle. Une \acrshort{vm} dimensionnée à huit \acrshort{vcpu} pour un pic transitoire continue de réserver ces huit \acrshort{vcpu} en période d'idle, privant les autres \acrshort{vm}s de cycles processeur disponibles.
+    \item \textbf{Les accélérateurs graphiques sont monopolisés.} L'attribution d'un \acrshort{gpu} à une \acrshort{vm} se fait par \emph{passthrough} \acrshort{vfio} exclusif : un \acrshort{gpu} physique entier est attaché à une seule \acrshort{vm}, et ce verrouillage persiste tant que la \acrshort{vm} n'est pas arrêtée. Mutualiser un \acrshort{gpu} entre plusieurs étudiants ou plusieurs travaux pratiques devient impossible sans matériel spécifique (NVIDIA vGPU sous licence, AMD MxGPU) ou sans architecture logicielle additionnelle.
+    \item \textbf{Les entrées-sorties disque locales ne sont arbitrées qu'à l'aveugle.} Le noyau Linux gère bien sûr la file d'attente du bloc, mais sans connaissance des priorités métier des \acrshort{vm}s. Une \acrshort{vm} \emph{idle} qui réveille brutalement un disque pour une opération de journalisation peut introduire une latence visible dans une autre \acrshort{vm} en train d'exécuter une tâche interactive.
+\end{enumerate}
+
+Ces verrous se traduisent par un gaspillage structurel : une fraction substantielle de la capacité matérielle du cluster est réservée sans jamais être consommée, et les refus d'admission interviennent en cluster non saturé. Ce constat trouve un écho exact dans le diagnostic posé par les ingénieurs porteurs de \emph{GRID ONE} (\og GPU monopolisés, CPU verrouillés, ressources gaspillées \fg{}).
+
+\section*{Question de recherche}
+
+Le présent travail se structure autour d'une question de recherche unique :
+
+\begin{quote}
+\itshape
+Peut-on, sans modifier le noyau Linux ni le moniteur de machine virtuelle QEMU, transformer un cluster Proxmox~VE de trois nœuds ou plus en un pool de ressources fongibles (RAM, vCPU, VRAM, IOPS), tout en garantissant des invariants stricts de consommation par machine virtuelle et en préservant la transparence pour les charges \emph{guest} ?
+\end{quote}
+
+La double contrainte --- pas de modification du noyau, pas de fork de QEMU --- n'est pas un dogme esthétique. Elle est dictée par trois considérations opérationnelles concrètes. D'abord, la maintenabilité : un patch kernel se désynchronise au premier rebase et bloque l'application des correctifs de sécurité. Ensuite, la portabilité : tout déploiement sur un cluster existant doit être non-invasif. Enfin, la conformité au support Proxmox : la commercialisation et la maintenance Proxmox VE supposent un noyau et un QEMU non modifiés.
+
+\section*{Objectifs spécifiques}
+
+L'atteinte de l'objectif général s'inscrit dans la tradition des systèmes d'exploitation modernes~\cite{tanenbaum_os} et se décline en cinq objectifs spécifiques, formulés de manière mesurable :
+
+\begin{enumerate}[leftmargin=*, label=\textbf{O\arabic*.}]
+    \item \textbf{Paging distant transparent.} Concevoir et implémenter un mécanisme d'éviction et de récupération de pages mémoire entre nœuds dont la latence de récupération d'une page distante reste inférieure à cinq millisecondes sur un réseau \acrshort{gbe}, et dont la \acrshort{vm} \emph{guest} ne perçoit aucune anomalie de fonctionnement.
+    \item \textbf{Élasticité multidimensionnelle.} Mettre en œuvre un ordonnancement adaptatif des \acrshort{vcpu} (par \emph{hotplug} QMP), du \acrshort{gpu} (par multiplexage temporel) et des entrées-sorties disque (par pondération cgroup), piloté par les compteurs noyau et les signaux PSI, sans intervention manuelle.
+    \item \textbf{Migration automatique pilotée par score.} Définir un score de placement multi-critères et l'utiliser pour déclencher des migrations live ou cold lorsque les indicateurs cluster franchissent des seuils calibrés, avec un downtime live mesuré inférieur à une seconde.
+    \item \textbf{Bibliothèque d'images métier.} Produire un ensemble d'images Ubuntu Server personnalisées et amorçables (développement, interface graphique, machine learning, etc.) à l'aide d'un outillage reproductible, conforme à la cible des dix images définie par la mission OMEGA.
+    \item \textbf{Validation outillée et reproductible.} Construire un harnais de tests automatisés couvrant les composants isolés, les scénarios cluster et les charges mixtes, jusqu'à une cible de cinq cents \acrshort{vm}s en rodage prolongé, avec exposition de métriques Prometheus consommables par Grafana.
+\end{enumerate}
+
+\section*{Méthodologie générale}
+
+La démarche d'ingénierie suivie repose sur trois principes simples mais structurants. Le premier est l'\emph{itération sur le terrain} : chaque évolution conceptuelle a été validée d'abord sur un lab \acrshort{kvm} mono-machine simulant trois nœuds, puis sur le cluster Proxmox réel de \emph{GRID ZERO} fourni par l'équipe ATLAS. Le second est le \emph{code comme source de vérité} : aucune affirmation du présent mémoire ne sera formulée sans qu'elle soit traçable dans un module, un test ou un fichier de configuration du dépôt. Le troisième est l'\emph{instrumentation systématique} : tout chemin chaud est porteur d'un compteur Prometheus, tout choix de placement est journalisé en \texttt{structlog}.
+
+L'écriture du code se fait en \emph{Rust} pour le démon (sûreté mémoire, performances asynchrones via Tokio), en \emph{Python} pour le contrôleur cluster (richesse de l'écosystème de manipulation REST, prototypage rapide des politiques), et en \emph{C} minimal pour le \emph{bridge} \texttt{LD\_PRELOAD} qui s'injecte dans le processus QEMU réel.
+
+\section*{Contributions du mémoire}
+
+Les contributions de ce travail, par ordre de matérialité technique, sont les suivantes :
+
+\begin{itemize}[leftmargin=*]
+    \item Un démon Rust unifié (\texttt{omega-daemon}, vingt-cinq modules, environ quatorze mille lignes) déployable symétriquement sur chaque nœud du cluster, jouant simultanément le rôle de \emph{compute} et de \emph{store}.
+    \item Un contrôleur Python (\texttt{omega-controller}, dix-neuf modules) hébergeant la vue cluster, les politiques d'admission RAM/vCPU/GPU, la politique de migration et la collecte résiliente.
+    \item Un \emph{protocole binaire} compact (trame fixe de vingt octets, payload de quatre kilo-octets, chiffrement TLS 1.3 avec vérification d'empreinte TOFU) pour le canal inter-nœuds, accompagné d'un canal HTTP de contrôle local.
+    \item Une \emph{intégration QEMU transparente} via un \emph{launcher} d'invocation (\texttt{omega-qemu-launcher}) et un \emph{bridge} \texttt{LD\_PRELOAD} (\texttt{omega-uffd-bridge.so}) qui permettent le déploiement sur des \acrshort{vm}s Proxmox existantes sans modification de leur configuration.
+    \item Un \emph{harnais de tests et de scénarios} (\texttt{omega-lab.sh}, environ quatre-vingt-cinq kilo-octets, vingt-trois tests et sept scénarios mixtes) couvrant cinq sections (isolés, store, cluster, GPU, mixtes).
+    \item Une \emph{bibliothèque d'images Ubuntu Server} personnalisées avec \acrshort{cubic}, dont la méthodologie de production est consignée en annexe.
+\end{itemize}
+
+\section*{Plan du mémoire}
+
+Le présent mémoire est organisé en trois chapitres principaux, encadrés par la présente introduction et une conclusion générale.
+
+Le \textbf{chapitre~1 (Généralités et état de l'art)} pose les fondations techniques nécessaires à la compréhension de la suite : architecture interne de Proxmox VE, modèle mémoire de Linux et mécanisme \texttt{userfaultfd}, cgroups~v2 et information de pression PSI, modèles de partage GPU (VFIO, vGPU, mediated devices, DRM), techniques de migration KVM (pre-copy, dirty bitmap). Une section est consacrée aux travaux antérieurs sur la \emph{disaggregated memory} (Infiniswap, LegoOS, Carbink, Fastswap), avec un positionnement explicite de notre approche.
+
+Le \textbf{chapitre~2 (Méthodologie, analyse et conception)} expose la démarche d'ingénierie, l'analyse des besoins, et la conception détaillée du système. Il décrit l'architecture globale par diagrammes UML (composants, déploiement, séquences), la conception du paging distant (algorithme d'éviction CLOCK, boucle adaptative, protocole binaire), la conception de l'élasticité (machines à états du scheduler vCPU, multiplexeur GPU, scheduler disque), la conception de la migration automatique (score multi-critères, seuils calibrés), et la conception du canal de transport sécurisé.
+
+Le \textbf{chapitre~3 (Implémentation et résultats)} décrit l'implémentation effective module par module, la stratégie de tests à cinq niveaux, et les résultats expérimentaux obtenus sur le cluster (latences, débits, scalabilité, comportement sous pression). Il discute également les limitations assumées du système et trace les perspectives d'évolution.
+
+La \textbf{conclusion générale} synthétise la contribution, replace le travail dans le cadre du projet \emph{GRID ONE}, et ouvre sur des perspectives concrètes de prolongement.
+
+Quatre annexes complètent le mémoire : la spécification complète du protocole binaire (annexe~A), le catalogue des points d'entrée HTTP du démon et du contrôleur (annexe~B), le référentiel des métriques Prometheus (annexe~C), et la documentation de production des images Ubuntu Server avec \acrshort{cubic} (annexe~D).

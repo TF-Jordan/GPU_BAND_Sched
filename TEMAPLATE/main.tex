@@ -103,6 +103,21 @@
 \newacronym{json}{JSON}{JavaScript Object Notation}
 \newacronym{http}{HTTP}{HyperText Transfer Protocol}
 \newacronym{tcp}{TCP}{Transmission Control Protocol}
+\newacronym{uffd}{UFFD}{userfaultfd --- file descriptor d'interception des défauts de page}
+\newacronym{vfio}{VFIO}{Virtual Function I/O}
+\newacronym{mdev}{mdev}{Mediated Device}
+\newacronym{numa}{NUMA}{Non-Uniform Memory Access}
+\newacronym{iaas}{IaaS}{Infrastructure as a Service}
+\newacronym{ceph}{Ceph}{Système de stockage distribué Ceph}
+\newacronym{enspy}{ENSPY}{École Nationale Supérieure Polytechnique de Yaoundé}
+\newacronym{rdma}{RDMA}{Remote Direct Memory Access}
+\newacronym{mpi}{MPI}{Message Passing Interface}
+\newacronym{rest}{REST}{REpresentational State Transfer}
+\newacronym{ha}{HA}{High Availability}
+\newacronym{gbe}{GbE}{Gigabit Ethernet}
+\newacronym{ssh}{SSH}{Secure Shell}
+\newacronym{iso}{ISO}{Image disque ISO 9660}
+\newacronym{cubic}{CUBIC}{Custom Ubuntu ISO Creator}
 
 %%% Symboles %%%
 \newglossaryentry{max-mem}{
@@ -298,13 +313,43 @@
 % ─── REMERCIEMENTS ──────────────────────────────────────────────────────────
 
 \chapter*{Remerciements}
+\addcontentsline{toc}{chapter}{Remerciements}
 
+Ce mémoire est l'aboutissement d'un travail d'ingénierie collectif mené dans le cadre du projet \emph{GRID ONE} de l'École Nationale Supérieure Polytechnique de Yaoundé. Nous tenons à exprimer notre profonde gratitude à toutes les personnes qui ont contribué à le rendre possible.
+
+Nos remerciements s'adressent en premier lieu à notre superviseur, le \textbf{Pr. Thomas Djotio Ndié}, dont la rigueur scientifique, la disponibilité et les orientations méthodologiques ont guidé chacune des étapes de la conception et de l'implémentation du système \emph{omega-remote-paging}.
+
+Nous remercions également l'ensemble de l'équipe pédagogique du Département de Génie Informatique de l'ENSPY pour le cadre de travail mis à notre disposition et la richesse des enseignements reçus tout au long du cycle d'ingénieur.
+
+Nos remerciements vont aux ingénieurs porteurs du projet \emph{GRID ONE} --- M.~Alain Mbo, M.~Abel Zogning et M.~Nassair Foupouagnigni --- pour avoir formulé le constat fondateur et défini l'architecture en quatre équipes (ATLAS, OMEGA, SIGMA, ORION) au sein de laquelle s'inscrit notre contribution.
+
+Nous saluons enfin l'esprit de coopération qui a régné entre les équipes du projet : sans le cluster physique opérationnel d'ATLAS (\emph{IronGrid}), sans les besoins formulés par SIGMA (\emph{Horizon}) et ORION (\emph{Parallax}), le présent travail aurait été dépourvu de son terrain d'expérimentation.
 
 \chapter*{Résumé}
+\addcontentsline{toc}{chapter}{Résumé}
 
+Dans un cluster \emph{Proxmox~VE} configuré par défaut, les ressources matérielles --- mémoire vive, processeurs virtuels, accélérateurs graphiques et bande passante de stockage --- sont cloisonnées au niveau du nœud. Une machine virtuelle créée sur un nœud saturé est refusée à l'admission même si le cluster, considéré globalement, dispose d'une marge confortable. Le mécanisme natif d'attribution GPU (\emph{VFIO passthrough}) verrouille un accélérateur entier à une seule machine virtuelle ; les processeurs virtuels demeurent statiques après la création ; les contentions d'entrées-sorties disque ne sont arbitrées qu'à l'aveugle par le noyau. Ce gaspillage structurel constitue le problème adressé par le présent mémoire.
 
+Nous proposons \textbf{omega-remote-paging} (nom de code \emph{FusionCore}), un système de mutualisation des ressources qui transforme un cluster Proxmox VE de trois nœuds ou plus en un pool de ressources fongibles, \emph{sans modification du noyau Linux ni de QEMU}. Le système repose sur quatre piliers techniques : (i) un mécanisme de \emph{paging distant} qui déplace les pages mémoire froides d'une machine virtuelle vers la RAM d'un autre nœud via \texttt{userfaultfd}, avec rappel transparent en moins de cinq millisecondes ; (ii) un \emph{ordonnanceur élastique} qui ajuste dynamiquement les processeurs virtuels via le protocole QMP en s'appuyant sur les compteurs cgroups~v2 et l'information de pression PSI ; (iii) un \emph{multiplexeur GPU} qui rompt le verrou du passthrough exclusif en arbitrant les accès au pilote DRM avec une élection de leader par \texttt{flock} ; (iv) une \emph{migration automatique} live ou cold pilotée par un score multi-critères pondéré \mbox{(RAM 50\,\% --- topologie 25\,\% --- CPU 15\,\% --- migrations actives 10\,\%)}.
+
+L'implémentation est constituée d'un démon Rust asynchrone (Tokio, 25 modules, $\approx 14\,000$~lignes) déployé symétriquement sur chaque nœud, et d'un contrôleur Python (19 modules, basé sur Click et \texttt{structlog}) hébergeant la vue cluster. Le canal inter-nœuds emploie un protocole binaire de 20~octets sur TCP/TLS (\emph{rustls}, vérification d'empreinte TOFU), avec compression LZ4 optionnelle. L'invariant strict $\text{local} + \text{distant} \le M_{\max}$ est vérifié à chaque opération \texttt{PUT\_PAGE}. Une intégration QEMU transparente, via un wrapper d'invocation (\texttt{omega-qemu-launcher}) et un \emph{bridge} \texttt{LD\_PRELOAD} (\texttt{omega-uffd-bridge.so}), permet le déploiement sur des machines virtuelles Proxmox existantes sans modification de leur configuration.
+
+La validation s'appuie sur cinq sections de tests automatisés (\texttt{omega-lab.sh}), un test de conformité à 30 machines virtuelles, un test de scalabilité à 500 machines virtuelles avec rodage d'une heure, ainsi que sur des dashboards Grafana alimentés par les métriques Prometheus du démon. Les latences mesurées (\texttt{GET\_PAGE} inférieures à 3~ms sur GbE, débit \texttt{PUT\_PAGE} supérieur à 100~Mo/s, downtime de migration live inférieur à 1~s) confirment la viabilité opérationnelle de l'approche.
+
+\textbf{Mots-clés.} Virtualisation, mutualisation de ressources, paging distant, \texttt{userfaultfd}, cgroups~v2, ordonnancement élastique, partage de GPU, migration live, Proxmox VE, Rust, Tokio.
 
 \chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+In a default \emph{Proxmox~VE} cluster, hardware resources --- memory, virtual processors, graphics accelerators and storage bandwidth --- are siloed at the node level. A virtual machine instantiated on a saturated node is rejected at admission even when the cluster, considered globally, holds significant headroom. The native GPU attachment mechanism (\emph{VFIO passthrough}) locks an entire accelerator to a single virtual machine; virtual processors remain static after creation; disk I/O contention is arbitrated blindly by the kernel. This structural waste is the problem addressed by this work.
+
+We propose \textbf{omega-remote-paging} (code name \emph{FusionCore}), a resource-pooling system that turns a three-node-or-more Proxmox~VE cluster into a fungible resource pool \emph{without any modification to the Linux kernel or to QEMU}. The system rests on four technical pillars: (i) a \emph{remote paging} mechanism that relocates a virtual machine's cold memory pages to another node's RAM through \texttt{userfaultfd}, with transparent recall in under five milliseconds; (ii) an \emph{elastic scheduler} that dynamically adjusts virtual CPUs through the QMP protocol, driven by cgroups~v2 counters and PSI pressure signals; (iii) a \emph{GPU multiplexer} that breaks the exclusive passthrough lock by arbitrating accesses to the DRM driver with \texttt{flock}-based leader election; (iv) an \emph{automatic live or cold migration} steered by a weighted multi-criteria score \mbox{(RAM 50\,\% --- topology 25\,\% --- CPU 15\,\% --- active migrations 10\,\%)}.
+
+The implementation comprises an asynchronous Rust daemon (Tokio, 25 modules, $\approx 14\,000$ lines) deployed symmetrically on every node, and a Python controller (19 modules, built on Click and \texttt{structlog}) hosting the cluster view. The inter-node channel uses a 20-byte binary protocol over TCP/TLS (\emph{rustls}, TOFU fingerprint verification), with optional LZ4 compression. The strict invariant $\text{local} + \text{remote} \le M_{\max}$ is enforced at every \texttt{PUT\_PAGE}. A transparent QEMU integration --- through an invocation wrapper (\texttt{omega-qemu-launcher}) and an \texttt{LD\_PRELOAD} bridge (\texttt{omega-uffd-bridge.so}) --- enables deployment on existing Proxmox VMs without altering their configuration.
+
+Validation rests on five automated test sections (\texttt{omega-lab.sh}), a 30-VM conformity test, a 500-VM scalability test with one-hour soak, and Grafana dashboards fed by the daemon's Prometheus metrics. Measured latencies (\texttt{GET\_PAGE} below 3~ms on GbE, \texttt{PUT\_PAGE} throughput above 100~MB/s, live-migration downtime below 1~s) confirm operational viability.
+
+\textbf{Keywords.} Virtualisation, resource pooling, remote paging, \texttt{userfaultfd}, cgroups~v2, elastic scheduling, GPU sharing, live migration, Proxmox VE, Rust, Tokio.
 
 % ─── TABLES DES MATIÈRES, FIGURES, TABLEAUX ─────────────────────────────────
 
@@ -323,15 +368,29 @@
 \pagenumbering{arabic}
 
 % =============================================================================
-% CHAPITRES — Ajoutez vos chapitres ici
+% CHAPITRES
 % =============================================================================
 
 \include{chapters/00-Introduction}
+\include{chapters/01-Etat-Art}
+\include{chapters/02-Conception}
+\include{chapters/03-Implementation}
+\include{chapters/04-Conclusion}
 
 % =============================================================================
 % BIBLIOGRAPHIE
 % =============================================================================
 
 \printbibliography[title={Bibliographie},heading=bibintoc]
+
+% =============================================================================
+% ANNEXES
+% =============================================================================
+
+\appendix
+\include{chapters/A1-Annexe-Protocole}
+\include{chapters/A2-Annexe-API}
+\include{chapters/A3-Annexe-Metriques}
+\include{chapters/A4-Annexe-ISO}
 
 \end{document}

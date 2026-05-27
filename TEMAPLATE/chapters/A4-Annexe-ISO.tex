@@ -1,0 +1,333 @@
+% =============================================================================
+% ANNEXE D — IMAGES ISO UBUNTU PERSONNALISÉES AVEC CUBIC
+% =============================================================================
+\chapter{Création et utilisation d'ISO Ubuntu personnalisées avec CUBIC}
+\label{annexe:iso}
+
+Cette annexe documente la méthodologie de production des images ISO Ubuntu Server personnalisées qui constituent le second livrable de l'équipe OMEGA dans le projet \emph{GRID ONE} (cible : dix images métier de type \texttt{ENSPY-DeepLearning}, \texttt{ENSPY-DevOps}, \texttt{ENSPY-CyberSec}, etc.). L'outil utilisé est \textbf{CUBIC} (\emph{Custom Ubuntu ISO Creator}). Trois profils ont été produits et documentés ici à titre d'illustration de la chaîne : \emph{développement}, \emph{interface graphique}, \emph{machine learning}.
+
+\section{Objectifs}
+
+La création d'ISO personnalisées répond à plusieurs objectifs techniques et opérationnels :
+
+\begin{itemize}[leftmargin=*]
+    \item réduire le temps d'installation et de configuration après le déploiement d'Ubuntu ;
+    \item disposer d'environnements homogènes sur plusieurs machines physiques ou virtuelles ;
+    \item automatiser l'installation des outils couramment utilisés ;
+    \item préparer des systèmes spécialisés selon les besoins métier ;
+    \item faciliter les tests dans des \acrshort{vm}s avant un déploiement réel ;
+    \item limiter les erreurs de configuration manuelle après installation.
+\end{itemize}
+
+Une \acrshort{vm} réservée via le portail \emph{Horizon} (équipe SIGMA) doit, dans la mesure du possible, démarrer directement dans un environnement prêt à l'emploi sans temps d'installation manuelle pour l'utilisateur final.
+
+\section{Présentation de l'outil CUBIC}
+
+\subsection{Définition}
+
+CUBIC est un outil graphique permettant de personnaliser des images ISO Ubuntu ou dérivées. Il charge une image ISO source, en extrait le système de fichiers interne, ouvre un environnement de type \emph{chroot} dans lequel l'opérateur installe des paquets, modifie des fichiers de configuration, ajoute des scripts, puis reconstruit une nouvelle image ISO amorçable.
+
+L'intérêt principal de CUBIC est qu'il simplifie le processus de personnalisation en évitant l'emploi manuel de commandes complexes (\texttt{mount}, \texttt{unsquashfs}, \texttt{mksquashfs}, \texttt{genisoimage}).
+
+\subsection{Principe général}
+
+Le fonctionnement de CUBIC peut être résumé en sept étapes :
+
+\begin{enumerate}[leftmargin=*]
+    \item sélection d'une ISO Ubuntu Server officielle comme base ;
+    \item création d'un projet CUBIC contenant les fichiers extraits de l'ISO ;
+    \item ouverture d'un terminal dans l'environnement \emph{chroot} de l'ISO ;
+    \item installation de paquets, modification de fichiers, ajout de scripts ;
+    \item nettoyage de l'environnement (réduction de la taille de l'image finale) ;
+    \item génération d'une nouvelle ISO personnalisée ;
+    \item test de l'ISO dans une \acrshort{vm} avant utilisation réelle.
+\end{enumerate}
+
+\section{Méthodologie générale}
+
+\subsection{Récupération de l'ISO Ubuntu Server}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+# Verification d'integrite avant utilisation
+sha256sum ubuntu-server.iso
+\end{lstlisting}
+
+Il est recommandé de conserver l'ISO originale intacte pour permettre la reprise en cas d'erreur.
+
+\subsection{Création d'un projet CUBIC}
+
+Les informations renseignées lors de la création sont : chemin du projet, ISO source, nom de la nouvelle ISO, label de volume, description de la variante.
+
+\subsection{Modification de l'environnement chroot}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+apt update
+\end{lstlisting}
+
+\subsection{Installation des paquets par profil}
+
+\textbf{Profil développement} :
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+apt install -y git curl wget vim nano build-essential openssh-server
+\end{lstlisting}
+
+\textbf{Profil interface graphique} :
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+apt install -y ubuntu-desktop-minimal gdm3 network-manager
+\end{lstlisting}
+
+\textbf{Profil machine learning} :
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+apt install -y python3 python3-pip python3-venv python3-dev \
+    build-essential git curl wget jupyter-notebook
+
+pip3 install numpy pandas matplotlib scikit-learn jupyterlab
+\end{lstlisting}
+
+\subsection{Ajout de scripts personnalisés}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+nano /usr/local/bin/post-install.sh
+chmod +x /usr/local/bin/post-install.sh
+
+# Contenu type :
+#!/bin/bash
+apt update
+echo "Systeme personnalise pret a l'emploi."
+\end{lstlisting}
+
+\subsection{Nettoyage de l'image}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+apt clean
+apt autoremove -y
+rm -rf /var/lib/apt/lists/*
+rm -rf /tmp/*
+\end{lstlisting}
+
+\subsection{Génération de l'ISO et nommage}
+
+Exemples de noms standardisés :
+\begin{itemize}[leftmargin=*]
+    \item \texttt{ubuntu-server-dev-custom.iso}
+    \item \texttt{ubuntu-server-gui-custom.iso}
+    \item \texttt{ubuntu-server-ml-custom.iso}
+\end{itemize}
+
+\subsection{Tests}
+
+Avant déploiement réel, l'ISO est testée dans une \acrshort{vm} sur le cluster :
+\begin{itemize}[leftmargin=*]
+    \item démarrage de l'ISO ;
+    \item déroulement de l'installation ;
+    \item présence des paquets installés ;
+    \item fonctionnement du réseau, de l'\acrshort{ssh} ;
+    \item interface graphique le cas échéant ;
+    \item outils de développement ou de machine learning selon le profil.
+\end{itemize}
+
+\section{Description des ISO produites}
+
+\subsection{ISO de développement}
+
+Contenu : \texttt{git}, \texttt{curl}, \texttt{wget}, \texttt{vim}, \texttt{nano}, \texttt{build-essential}, \texttt{openssh-server}, outils réseau de base. Usage : développeurs, administrateurs système, étudiants ayant besoin d'un environnement Linux \emph{ready-to-use}.
+
+\subsection{ISO avec interface graphique}
+
+Contenu : environnement de bureau minimal, gestionnaire de connexion (GDM3), gestion réseau graphique. Usage : utilisateurs souhaitant la stabilité d'Ubuntu Server avec une interface graphique pour navigation, édition, administration.
+
+\subsection{ISO orientée machine learning}
+
+Contenu : \texttt{python3}, \texttt{pip}, \texttt{venv}, \texttt{numpy}, \texttt{pandas}, \texttt{matplotlib}, \texttt{scikit-learn}, \texttt{jupyterlab}. Usage : TP IA, projets de fin d'études en machine learning, expérimentation de modèles.
+
+\section{Guide d'utilisation des ISO}
+
+\subsection{Ressources minimales conseillées}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Type d'ISO} & \textbf{Ressources minimales} & \textbf{Remarques} \\
+\midrule
+ISO développement     & 2 Gio RAM, 20 Gio disque & Convient aux machines modestes \\
+ISO graphique         & 4 Gio RAM, 30 Gio disque & GUI plus exigeante \\
+ISO machine learning  & 8 Gio RAM, 40 Gio disque & Notebooks + calculs \\
+\bottomrule
+\end{tabular}
+\caption{Ressources minimales recommandées selon le type d'ISO.}
+\end{table}
+
+\subsection{Création d'une clé USB amorçable}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+lsblk
+sudo dd if=nom_de_l_iso.iso of=/dev/sdX bs=4M status=progress oflag=sync
+\end{lstlisting}
+
+\textbf{Attention} : \texttt{/dev/sdX} doit être la clé USB et non un disque dur du système. Une erreur peut effacer un disque dur.
+
+\subsection{Vérifications après installation}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+# Version
+lsb_release -a
+uname -a
+
+# Paquets
+git --version
+python3 --version
+pip3 --version
+ssh -V
+
+# Service SSH
+systemctl status ssh
+ip a
+sudo systemctl enable --now ssh   # si inactif
+
+# Jupyter (profil ML)
+jupyter lab --version
+jupyter lab --ip=0.0.0.0 --no-browser
+
+# Interface graphique (profil GUI)
+systemctl status gdm3
+sudo systemctl set-default graphical.target
+sudo reboot
+\end{lstlisting}
+
+\section{Bonnes pratiques}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Nommer clairement les ISO} : \texttt{ubuntu-22.04-dev-v1.iso}, \texttt{ubuntu-22.04-gui-v1.iso}, \texttt{ubuntu-22.04-ml-v1.iso}.
+    \item \textbf{Tenir un journal de modifications} : date de création, ISO source, paquets ajoutés, fichiers modifiés, scripts ajoutés, tests effectués, problèmes connus.
+    \item \textbf{Tester avant déploiement} : toute ISO doit être testée en \acrshort{vm} avant la machine physique.
+    \item \textbf{Éviter les configurations trop spécifiques} : pas d'IP fixe, pas de hostname définitif, pas de mots de passe sensibles, pas de clés privées \acrshort{ssh}, pas de fichiers secrets dans l'ISO. Ces éléments sont à appliquer post-installation par cloud-init.
+\end{itemize}
+
+\section{Difficultés courantes et solutions}
+
+\begin{longtable}{p{5cm}p{9cm}}
+\toprule
+\textbf{Difficulté} & \textbf{Solution} \\
+\midrule
+\endhead
+ISO trop volumineuse                 & \texttt{apt clean}, supprimer paquets inutiles, éviter fichiers lourds \\
+\addlinespace
+Paquet ne s'installe pas dans CUBIC  & Vérifier le réseau chroot, \texttt{apt update}, réessayer \\
+\addlinespace
+GUI ne démarre pas après installation & Vérifier GDM3, activer \texttt{graphical.target}, redémarrer \\
+\addlinespace
+\acrshort{ssh} ne fonctionne pas     & Vérifier \texttt{openssh-server}, activer le service \texttt{ssh} \\
+\addlinespace
+Jupyter inaccessible à distance      & \texttt{--ip=0.0.0.0}, vérifier firewall et IP de la machine \\
+\addlinespace
+La machine ne démarre pas sur l'USB  & Ordre de boot, mode UEFI/Legacy, recréer la clé \\
+\bottomrule
+\caption{Difficultés possibles et actions correctives.}
+\end{longtable}
+
+\section{Sécurité}
+
+La personnalisation d'une ISO peut introduire des risques si elle est mal maîtrisée :
+
+\begin{itemize}[leftmargin=*]
+    \item ne jamais intégrer de mot de passe personnel en clair dans l'image ;
+    \item éviter d'intégrer des clés privées \acrshort{ssh} ;
+    \item maintenir les paquets à jour ;
+    \item vérifier les sources des paquets installés ;
+    \item documenter chaque modification ;
+    \item tester l'image avant déploiement ;
+    \item conserver l'ISO officielle comme base de secours.
+\end{itemize}
+
+Si l'ISO est destinée à être partagée (par exemple, publication sur le pool Ceph de \emph{GRID ONE}), il faut s'assurer qu'elle ne contient aucune donnée personnelle, aucun identifiant et aucun fichier confidentiel.
+
+\section{Fiche de suivi}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{>{\bfseries}p{5cm}p{9cm}}
+\toprule
+Nom de l'ISO        & à compléter \\
+Version             & à compléter \\
+ISO source          & à compléter \\
+Date de création    & à compléter \\
+Usage cible         & Développement / Graphique / Machine learning \\
+Paquets ajoutés     & à compléter \\
+Scripts ajoutés     & à compléter \\
+Tests effectués     & à compléter \\
+Problèmes connus    & à compléter \\
+Responsable         & à compléter \\
+\bottomrule
+\end{tabular}
+\caption{Fiche de suivi d'une ISO personnalisée.}
+\end{table}
+
+\section{Commandes utiles}
+
+\subsection{Vérifier les ressources}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+free -h
+df -h
+lsblk
+lscpu
+\end{lstlisting}
+
+\subsection{Vérifier le réseau}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+ip a
+ip route
+ping -c 4 8.8.8.8
+ping -c 4 google.com
+\end{lstlisting}
+
+\subsection{Mettre à jour le système}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+sudo apt update
+sudo apt upgrade -y
+\end{lstlisting}
+
+\subsection{Vérifier les services}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+systemctl status ssh
+systemctl status NetworkManager
+systemctl status gdm3
+\end{lstlisting}
+
+\section{Cible des dix images métier de GRID ONE}
+
+La cible définie par les ingénieurs porteurs du projet est de produire dix images, dont les trois décrites ici constituent les fondations. Le tableau~\ref{tab:images-cible} récapitule la cible complète.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Image} & \textbf{Domaine} & \textbf{Stack principale} \\
+\midrule
+ENSPY-DeepLearning & IA / ML        & Ubuntu 22.04 + CUDA 12 + PyTorch + TF + Jupyter \\
+ENSPY-DataScience  & Big Data       & Python 3.11 + Pandas + scikit-learn + R + RStudio \\
+ENSPY-CyberSec     & Sécu offensive & Kali Linux + Metasploit + Burp + Nmap + Hashcat \\
+ENSPY-BlueTeam     & Sécu défensive & Ubuntu + Snort/Suricata + ELK + Wazuh SIEM \\
+ENSPY-DevOps       & DevOps         & Docker + k3s + Terraform + Ansible + Jenkins \\
+ENSPY-WebDev       & Web dev        & Node.js + React + PostgreSQL + Nginx + Redis \\
+ENSPY-EmbeddedSys  & Embarqué       & GCC ARM + OpenOCD + QEMU + Arduino IDE \\
+ENSPY-NetworkLab   & Réseaux        & GNS3 + Wireshark + FRRouting + Cisco IOU \\
+ENSPY-HPC          & Calcul HP      & OpenMPI + OpenMP + BLAS + LAPACK + Intel oneAPI \\
+ENSPY-Research     & Recherche      & LaTeX + Zotero + Python scientifique + Octave \\
+\bottomrule
+\end{tabular}
+\caption{Cible des dix images OS métier de GRID ONE.}
+\label{tab:images-cible}
+\end{table}
+
+Les images ENSPY-DeepLearning, ENSPY-Research et ENSPY-WebDev correspondent respectivement aux profils \emph{machine learning}, \emph{développement} (étendu) et un futur profil web ; les images ENSPY-DataScience et ENSPY-HPC sont des extensions immédiates de la base ML ; les autres images requièrent des paquets supplémentaires dont l'intégration dans le \emph{chroot} CUBIC suit la même méthodologie.
+
+\section{Conclusion}
+
+La création d'images Ubuntu Server personnalisées avec CUBIC permet de préparer des systèmes adaptés à des usages précis tout en réduisant le temps de configuration après installation. À partir d'Ubuntu Server, trois variantes ont été produites (développement, interface graphique, machine learning) et sept restent à compléter pour atteindre la cible \emph{GRID ONE}. La méthodologie présentée --- chroot CUBIC, installation par profil, nettoyage, génération, test en \acrshort{vm} --- est reproductible et constitue la procédure standard de l'équipe OMEGA pour la bibliothèque d'images du portail \emph{Horizon}.

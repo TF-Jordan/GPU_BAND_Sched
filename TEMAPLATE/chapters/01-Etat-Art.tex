@@ -1,0 +1,279 @@
+% =============================================================================
+% CHAPITRE 1 — GÉNÉRALITÉS ET ÉTAT DE L'ART
+% =============================================================================
+\chapter{Généralités et état de l'art}
+\label{chap:etat-art}
+
+\section*{Introduction du chapitre}
+
+L'objectif de ce chapitre est de doter le lecteur du socle technique indispensable à la compréhension des choix de conception et d'implémentation présentés dans les chapitres suivants. Quatre familles de techniques sous-tendent le système \emph{omega-remote-paging} : la virtualisation par hyperviseur de type~1, la gestion mémoire en espace utilisateur via \texttt{userfaultfd}, l'ordonnancement de ressources sous Linux moderne (cgroups~v2, PSI), et les modèles de partage de \acrshort{gpu}. Nous discutons également les travaux antérieurs sur la \emph{disaggregated memory} pour situer précisément la contribution du présent travail, puis concluons par une synthèse comparative qui justifie les choix retenus.
+
+% -----------------------------------------------------------------------------
+\section{Virtualisation et clusters Proxmox~VE}
+\label{sec:virt-proxmox}
+
+\subsection{KVM, QEMU et le protocole QMP}
+
+La \acrshort{kvm}~\cite{kvm_doc} (\emph{Kernel-based Virtual Machine}) est un module du noyau Linux qui transforme ce dernier en hyperviseur de type~1 en exploitant les extensions matérielles de virtualisation des processeurs (\emph{Intel VT-x}, \emph{AMD-V}). KVM expose une interface \texttt{ioctl} via le pseudo-fichier \texttt{/dev/kvm} : la création d'une machine virtuelle, l'allocation de mémoire \emph{guest}, l'exécution d'un \emph{vCPU} dans une boucle \texttt{KVM\_RUN}.
+
+\textbf{QEMU}~\cite{qemu_doc} (\emph{Quick EMUlator}) joue un rôle complémentaire : il assure l'émulation des périphériques (carte réseau, contrôleur disque, GPU virtuel, ACPI) et fournit l'environnement d'exécution dans lequel le processeur virtualisé voit un \og{}vrai\fg{} ordinateur. L'association KVM (accélération processeur en \emph{ring~0} matériel) + QEMU (émulation des périphériques en espace utilisateur) constitue la pile de virtualisation dominante sous Linux.
+
+Le \textbf{\acrshort{qmp}} (\emph{QEMU Machine Protocol}) est un protocole JSON-RPC qui permet à un processus extérieur de piloter une instance QEMU en cours d'exécution via une socket Unix. Les commandes pertinentes pour notre travail sont :
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{query-cpus-fast} : énumérer les \acrshort{vcpu}s actifs ;
+    \item \texttt{device\_add cpu} / \texttt{device\_del} : effectuer un \emph{hotplug} (ajout dynamique) ou un \emph{hotunplug} d'un \acrshort{vcpu} ;
+    \item \texttt{query-balloon} et \texttt{balloon} : interroger et modifier le \emph{balloon} virtio pour ajuster la mémoire visible \emph{guest} ;
+    \item \texttt{device\_add} / \texttt{device\_del} sur \texttt{hostpci0} : attacher ou détacher dynamiquement un GPU passthrough.
+\end{itemize}
+
+Proxmox VE expose ces sockets QMP sous \texttt{/var/run/qemu-server/\{vmid\}.qmp} et c'est par ce canal que notre démon interagit avec les \acrshort{vm}s sans dépendre du démon \texttt{pvedaemon}.
+
+\subsection{Architecture interne de Proxmox~VE}
+
+Proxmox~VE~\cite{proxmox_doc} est une distribution Debian augmentée d'un panel d'outils en Perl et en Rust qui orchestrent KVM, QEMU et LXC. Ses composants clés sont :
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{pveproxy} : reverse-proxy HTTPS qui expose l'API REST sur le port 8006 ;
+    \item \texttt{pvedaemon} : démon central qui exécute les opérations longues (création de VM, migration, sauvegarde) ;
+    \item \texttt{pmxcfs} : système de fichiers FUSE répliqué sur tous les nœuds via Corosync, qui héberge l'état du cluster sous \texttt{/etc/pve} ;
+    \item \texttt{qm} : interface en ligne de commande pour le cycle de vie des \acrshort{vm}s ;
+    \item \texttt{ha-manager} : couche optionnelle de haute disponibilité avec \emph{fencing} et reprise.
+\end{itemize}
+
+Chaque \acrshort{vm} possède un identifiant numérique unique (\texttt{vmid}) et un fichier de configuration \texttt{/etc/pve/qemu-server/\{vmid\}.conf} qui décrit ses ressources : mémoire (\texttt{memory:}), \acrshort{vcpu}s (\texttt{cores:}, \texttt{sockets:}, \texttt{vcpus:}), disques (\texttt{scsi0:}, \texttt{virtio0:}), réseau (\texttt{net0:}), et passthrough PCI (\texttt{hostpci0:}). Notre démon lit ces fichiers pour découvrir les \acrshort{vm}s locales et leurs budgets cibles.
+
+\subsection{Stockage partagé : Ceph et RBD}
+
+Le \textbf{stockage partagé} est une condition nécessaire à la migration efficace d'une \acrshort{vm} : si le disque ne peut être atteint que depuis le nœud source, alors toute migration entraîne le transfert de tout le contenu du disque (souvent plusieurs dizaines de giga-octets) en plus de la mémoire vive. Avec un système de fichiers distribué comme \emph{Ceph}~\cite{ceph_doc}, le disque virtuel d'une \acrshort{vm} (image RBD --- \acrshort{rbd}) est visible depuis n'importe quel nœud sans transfert préalable.
+
+Ceph organise les données en \emph{objets} de quelques mégaoctets répliqués (facteur 2 ou 3) sur des disques \emph{OSD} (\emph{Object Storage Daemon}) répartis sur l'ensemble des nœuds. La cohérence est assurée par l'algorithme CRUSH qui calcule de manière déterministe la localisation des objets en fonction d'une carte du cluster, sans annuaire centralisé. Pour notre système, l'hypothèse Ceph permet d'affirmer que \og{}seule la mémoire vive est transférée lors d'une migration\fg{} : les disques sont déjà partagés et accessibles depuis le nœud cible.
+
+% -----------------------------------------------------------------------------
+\section{Modèle mémoire de Linux et paging distant}
+\label{sec:linux-mem}
+
+\subsection{Pages, défauts et \emph{madvise}}
+
+Le noyau Linux gère la mémoire vive en \emph{pages} de quatre kilo-octets (taille par défaut sur x86\_64, taille pertinente pour notre système puisque \texttt{userfaultfd} opère sur cette granularité). À chaque accès mémoire d'un processus, l'unité de gestion mémoire (\emph{MMU}) consulte la table des pages pour traduire l'adresse virtuelle en adresse physique. Lorsqu'une page virtuelle n'est pas présente physiquement (encore non allouée, swappée, démontée par \texttt{madvise}), la MMU déclenche un \emph{défaut de page} qui transfère le contrôle au noyau.
+
+L'appel système \texttt{madvise(MADV\_DONTNEED, addr, len)}~\cite{madvise_man} demande au noyau de libérer le contenu physique des pages couvrant l'intervalle \texttt{[addr, addr+len)} : à l'accès suivant, le contenu sera réinitialisé à zéro (\emph{anonymous mapping}) ou rechargé depuis le fichier d'origine (\emph{file mapping}). Cet appel est l'outil qui nous permet, après avoir envoyé une page froide vers un nœud distant, de libérer effectivement la mémoire vive locale.
+
+Le pseudo-fichier \texttt{/proc/meminfo} expose les compteurs mémoire du nœud, dont les plus utiles pour notre système sont :
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{MemTotal} : RAM totale physique ;
+    \item \texttt{MemAvailable} : RAM disponible estimée par le noyau sans recourir au \emph{swap} ;
+    \item \texttt{SwapTotal} / \texttt{SwapFree} : espace de \emph{swap} (que nous n'utilisons pas, le paging distant étant notre alternative).
+\end{itemize}
+
+La grandeur dérivée centrale, surveillée par notre moteur d'éviction, est le \emph{taux d'occupation} :
+$$\mathrm{usage\_pct} = \frac{\mathrm{MemTotal} - \mathrm{MemAvailable}}{\mathrm{MemTotal}} \times 100$$
+
+\subsection{\texttt{userfaultfd} : intercepter les défauts de page en espace utilisateur}
+
+Introduit dans Linux~4.3 (2015), \texttt{userfaultfd}~\cite{userfaultfd_man} est un mécanisme noyau qui permet à un processus de \emph{déléguer} le traitement des défauts de page d'une plage mémoire à un autre processus (ou à un autre fil) en espace utilisateur. L'enregistrement se fait via les \texttt{ioctl} :
+\begin{itemize}[leftmargin=*]
+    \item \texttt{UFFDIO\_REGISTER} avec mode \texttt{UFFDIO\_REGISTER\_MODE\_MISSING} : recevoir les notifications de défaut de page sur une plage donnée ;
+    \item \texttt{UFFDIO\_COPY} : satisfaire un défaut de page en y injectant un buffer fourni par le processus utilisateur ;
+    \item \texttt{UFFDIO\_ZEROPAGE} : satisfaire un défaut de page en y injectant une page de zéros (raccourci pour les pages anonymes nouvelles).
+\end{itemize}
+
+Le processus qui veut intercepter les défauts ouvre un \emph{file descriptor} \texttt{userfaultfd} et lit des événements \texttt{uffd\_msg} via \texttt{read()}. Chaque événement contient l'adresse virtuelle ayant causé le défaut. Le fil \emph{guest} reste bloqué dans le défaut tant que le processus utilisateur n'a pas répondu par \texttt{UFFDIO\_COPY} ou \texttt{UFFDIO\_ZEROPAGE}. Le mécanisme est donc \emph{strictement synchrone} et son débit est limité par la latence du chemin utilisateur.
+
+Depuis Linux~5.11 (2021), l'option \texttt{vm.unprivileged\_userfaultfd=1} permet aux processus non-root de créer un \texttt{userfaultfd} ; auparavant, seul \texttt{root} y avait accès. Notre démon ayant des privilèges étendus (lecture de \texttt{/proc/meminfo}, écriture sur les sockets QMP, invocation de \texttt{qm migrate}), cette restriction ne nous affecte pas directement, mais l'option doit être activée pour le \emph{bridge} \texttt{LD\_PRELOAD} injecté dans le processus QEMU lui-même.
+
+\textbf{Limitations}. \texttt{userfaultfd} ne couvre que les \emph{anonymous mappings} (mémoire allouée par \texttt{mmap(MAP\_ANONYMOUS)}) et les \emph{shmem} (mémoire partagée tmpfs). Pour QEMU, cela impose que la mémoire \emph{guest} soit allouée via un \texttt{memory-backend-memfd} ou un \texttt{memory-backend-file} en \emph{shmem} --- ce qui justifie la transformation opérée par notre \texttt{omega-qemu-launcher} (cf.~chapitre~\ref{chap:implementation}).
+
+\subsection{Algorithmes de remplacement de pages}
+
+Le choix de l'algorithme d'éviction (\emph{quelle page froide envoyer ?}) impacte directement le \emph{hit-rate} du cache local et donc la latence perçue par la \acrshort{vm}. Les trois familles classiques sont :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{LRU} (\emph{Least Recently Used}) : maintenir un ordre temporel précis des accès. Optimal théoriquement, mais coût $O(1)$ par accès uniquement avec des structures de données complexes (liste doublement chaînée + table de hachage).
+    \item \textbf{CLOCK} (ou \emph{Second Chance})~\cite{jiang_2005_clockpro} : approximation à un bit de LRU. Chaque page porte un bit \emph{accessed} mis à 1 par la MMU à chaque accès. Une aiguille circule sur l'ensemble des pages : si le bit vaut 0, la page est évincée ; sinon, le bit est remis à 0 et l'aiguille avance. Coût $O(1)$ amorti, complexité de mise en œuvre faible.
+    \item \textbf{ARC} (\emph{Adaptive Replacement Cache}) : équilibre dynamique entre récence et fréquence, supérieur à LRU dans la majorité des charges de travail réelles, mais avec un coût d'implémentation et de mémoire plus élevé.
+\end{itemize}
+
+Le choix de \textbf{CLOCK} pour notre moteur d'éviction (\texttt{eviction\_engine.rs}) repose sur trois arguments. Premièrement, sa simplicité d'implémentation (quelques centaines de lignes contre plusieurs milliers pour ARC) réduit la surface des bugs critiques sur un chemin chaud. Deuxièmement, son coût processeur est négligeable face à la latence réseau (la décision d'éviction est consommée par une opération réseau d'environ deux millisecondes). Troisièmement, les pages \emph{vraiment} froides sont aisées à distinguer : si une page n'a pas été accédée depuis plusieurs minutes, peu importe l'algorithme exact, elle sera détectée.
+
+\subsection{Travaux antérieurs : disaggregated memory}
+
+L'idée d'utiliser la RAM d'un nœud distant comme étage supplémentaire de la hiérarchie mémoire d'un autre nœud a fait l'objet d'une littérature substantielle ces dix dernières années, motivée par l'avènement des réseaux \emph{low-latency} (Infiniband, RoCE, RDMA). Sans prétendre à l'exhaustivité, citons :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Infiniswap}~\cite{gu_2017_infiniswap} (NSDI~2017) : transforme la RAM de pairs en \emph{block device} consommé comme \emph{swap}, via RDMA. Approche \emph{block-level} qui exige le \emph{swap} Linux activé.
+    \item \textbf{LegoOS}~\cite{shan_2018_legoos} (OSDI~2018) : redéfinit l'OS pour la \emph{disaggregated hardware}, sépare processus / mémoire / stockage en machines indépendantes. Approche radicale qui exige un OS custom.
+    \item \textbf{Remote Memory in the Age of Fast Networks}~\cite{aguilera_2017_remote_memory} (SoCC~2017) : étude fondatrice de la viabilité du paging distant sur réseaux à haute performance.
+    \item \textbf{Carbink}~\cite{zhou_2022_carbink} (OSDI~2022) : ajoute \emph{erasure coding} pour la tolérance aux pannes des stores et une gestion fine de la pression mémoire.
+    \item \textbf{Pond}~\cite{li_2023_pond} (ASPLOS~2023) : mutualisation matérielle de mémoire via CXL, direction matérielle complémentaire à notre approche logicielle.
+\end{itemize}
+
+Notre positionnement est résolument \emph{pragmatique} : (i) nous restons en \emph{userspace} pur (aucune modification kernel) ; (ii) nous opérons sur GbE et non sur RDMA, ce qui réduit la latence cible mais épargne la complexité matérielle ; (iii) nous opérons à la granularité \emph{page} sans modification de QEMU ; (iv) nous traitons l'unité \og{}cluster Proxmox\fg{} comme premier citoyen, là où les travaux cités traitent un \og{}cluster de processus\fg{} générique. Le tableau~\ref{tab:cmp-rm} synthétise ces choix.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Système} & \textbf{Patch kernel} & \textbf{Transport} & \textbf{Granularité} & \textbf{Cible} & \textbf{Modif. QEMU} \\
+\midrule
+Infiniswap   & Module noyau & RDMA & Block & Swap-disk     & Non \\
+LegoOS       & OS custom    & RDMA & Page  & OS complet    & N/A \\
+Fastswap     & Module noyau & RDMA & Page  & Swap-disk     & Non \\
+Carbink      & Patch noyau  & RDMA & Page  & Swap-disk     & Non \\
+AIFM         & Userspace    & RDMA & Objet & Application   & N/A \\
+\textbf{FusionCore} & \textbf{Aucun} & \textbf{TCP/TLS} & \textbf{Page} & \textbf{Cluster Proxmox} & \textbf{Aucun} \\
+\bottomrule
+\end{tabular}
+\caption{Positionnement de FusionCore parmi les systèmes de mémoire distante.}
+\label{tab:cmp-rm}
+\end{table}
+
+% -----------------------------------------------------------------------------
+\section{Ordonnancement de ressources sous Linux moderne}
+\label{sec:cgroups-psi}
+
+\subsection{cgroups~v2 : la hiérarchie unifiée}
+
+Depuis Linux~4.5, les \emph{control groups} version~2 (cgroups~v2)~\cite{cgroups_v2_doc} offrent une \emph{hiérarchie unifiée} pour le contrôle des ressources : un même nœud de l'arbre cgroup contrôle simultanément le processeur, la mémoire, les I/O, et bénéficie d'une comptabilité cohérente. Les fichiers d'intérêt pour notre système sont :
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{cpu.weight} : poids proportionnel à appliquer à ce cgroup dans la file d'attente CPU (défaut 100, plage 1--10000) ;
+    \item \texttt{cpu.max} : plafond absolu sous la forme \texttt{<quota> <period>} en microsecondes (\texttt{max 100000} = pas de plafond) ;
+    \item \texttt{cpu.stat} : compteurs \texttt{usage\_usec}, \texttt{nr\_throttled}, \texttt{throttled\_usec} ;
+    \item \texttt{io.weight} : poids proportionnel pour les I/O bloc (défaut 100, plage 1--10000) ;
+    \item \texttt{io.stat} : compteurs \texttt{rbytes}, \texttt{wbytes}, \texttt{rios}, \texttt{wios} par périphérique bloc.
+\end{itemize}
+
+Proxmox~VE place chaque \acrshort{vm} dans un cgroup nommé \mbox{\texttt{/sys/fs/cgroup/qemu.slice/\{vmid\}.scope/}}. C'est dans ce cgroup que notre démon écrit \texttt{cpu.weight} et \texttt{io.weight} pour exprimer ses décisions d'ordonnancement, et c'est de ce cgroup qu'il lit \texttt{cpu.stat} et \texttt{io.stat} pour mesurer la charge réelle.
+
+\subsection{PSI : \emph{Pressure Stall Information}}
+
+Introduit dans Linux~4.20, PSI~\cite{psi_doc} quantifie la \emph{pression} qu'une ressource exerce sur les processus : combien de temps perd-on \emph{collectivement} à attendre cette ressource ? Les pseudo-fichiers \texttt{/proc/pressure/cpu}, \texttt{/proc/pressure/memory}, \texttt{/proc/pressure/io} exposent deux séries :
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{some} : pourcentage du temps pendant lequel \emph{au moins un} fil était en attente de cette ressource ;
+    \item \texttt{full} : pourcentage du temps pendant lequel \emph{tous} les fils étaient en attente.
+\end{itemize}
+
+Chaque ligne fournit trois moyennes glissantes : sur 10~secondes (\texttt{avg10}), 60~secondes (\texttt{avg60}) et 300~secondes (\texttt{avg300}). L'interprétation est sans ambiguïté : un \texttt{some.avg10} mémoire à 0~\% indique qu'aucun processus n'a attendu la mémoire dans les dix dernières secondes ; au-delà de 10~\%, la pression est suffisamment élevée pour justifier une action proactive (éviction, migration).
+
+PSI est l'outil de choix pour les systèmes \emph{réactifs} aux ressources, car il fournit une vue globale agrégée \emph{sans nécessiter de sonder chaque processus individuellement}. Notre démon consomme PSI à trois endroits : pression mémoire pour déclencher l'éviction, pression CPU pour confirmer une saturation processeur, pression I/O pour activer la pondération \texttt{io.weight} adaptative.
+
+\subsection{Hotplug de \acrshort{vcpu} et de mémoire}
+
+Le \emph{hotplug} d'un \acrshort{vcpu} dans une \acrshort{vm} en cours d'exécution se fait via les commandes QMP \texttt{device\_add cpu} et \texttt{device\_del}. Plusieurs prérequis matériels et logiciels conditionnent son succès :
+
+\begin{itemize}[leftmargin=*]
+    \item Lancement de la \acrshort{vm} avec \texttt{-smp <init>,maxcpus=<max>} : le \og{}budget plafond\fg{} doit être déclaré à l'avance ;
+    \item Présence de \texttt{qemu-guest-agent} dans la \acrshort{vm} pour signaler la disponibilité du nouveau \acrshort{vcpu} au \emph{guest} ;
+    \item Support \emph{hotplug CPU} activé dans le noyau \emph{guest} (cas standard sur Linux~$\ge$~3.10 et Windows~Server~$\ge$~2016).
+\end{itemize}
+
+L'option Proxmox \texttt{hotplug=cpu,disk,network,memory,usb} dans le fichier de configuration de la \acrshort{vm} active explicitement cette possibilité. Notre démon vérifie le respect de ces prérequis au moment de l'admission (cf.~chapitre~\ref{chap:implementation}, section~\ref{sec:tests}).
+
+% -----------------------------------------------------------------------------
+\section{Partage de \acrshort{gpu} sous Linux}
+\label{sec:gpu-share}
+
+\subsection{VFIO passthrough exclusif}
+
+\textbf{VFIO} (\emph{Virtual Function I/O}) est le sous-système Linux qui permet d'attribuer un périphérique PCI à une \acrshort{vm} en mode \emph{passthrough} (\og{}coupure\fg{} directe avec l'IOMMU). C'est le mode d'attribution natif d'un \acrshort{gpu} à une \acrshort{vm} sous KVM/QEMU. Son principal défaut, du point de vue de la mutualisation, est son \emph{caractère exclusif} : un \acrshort{gpu} attribué à une \acrshort{vm} est invisible pour le système hôte et pour toute autre \acrshort{vm}. Tant que la \acrshort{vm} ne s'arrête pas, le \acrshort{gpu} reste verrouillé.
+
+Cette exclusivité est dictée par l'architecture matérielle : la plupart des \acrshort{gpu}s grand public et entrée-de-gamme professionnels ne supportent pas la \emph{partition matérielle} (qui consisterait à présenter plusieurs \emph{Virtual Functions} sur le bus PCI). Le verrouillage est aussi une garantie de cloisonnement : VFIO empêche que deux processus écrivent simultanément dans des registres MMIO contradictoires.
+
+\subsection{NVIDIA vGPU, AMD MxGPU et \emph{mediated devices}}
+
+Pour rompre l'exclusivité, plusieurs voies existent côté matériel. Sur les \acrshort{gpu}s NVIDIA professionnels (Tesla M/V/A, RTX A40, etc.), la technologie \textbf{vGPU} permet de présenter plusieurs \emph{instances virtuelles} d'un même \acrshort{gpu}, chacune visible comme un périphérique PCI distinct sous le sous-système \texttt{mdev} (\emph{mediated devices}). La fonctionnalité est cependant soumise à une \emph{licence NVIDIA Enterprise} dont le coût est prohibitif pour une utilisation académique. Sur les \acrshort{gpu}s AMD professionnels (S7100, S7150), la technologie \textbf{MxGPU} fournit un équivalent en \emph{hardware SR-IOV} sans licence additionnelle, mais limité à des modèles peu répandus.
+
+Pour les \acrshort{gpu}s grand public, ces voies sont fermées. Le partage doit donc s'opérer \emph{en logiciel}, ce qui nous conduit à la voie des \emph{render nodes} DRM.
+
+\subsection{\emph{Render nodes} DRM, virtio-gpu, virgl}
+
+Le sous-système \textbf{DRM} (\emph{Direct Rendering Manager}) est l'interface noyau de pilotage des \acrshort{gpu}s sous Linux. Depuis Linux~3.12, DRM expose des \emph{render nodes} sous \texttt{/dev/dri/renderD*} qui permettent une utilisation \emph{compute} du \acrshort{gpu} (calcul OpenCL, encodage vidéo, rendu off-screen) sans exiger les droits d'accès aux modes graphiques. C'est sur ces \emph{render nodes} que notre démon ouvre une connexion pour interroger les capacités du \acrshort{gpu} (mémoire vidéo totale, type de pilote, identifiants matériels) via les \texttt{ioctl} \texttt{DRM\_IOCTL\_VERSION} et \texttt{DRM\_IOCTL\_GEM\_*}.
+
+\textbf{virtio-gpu} est le pilote \emph{guest} virtio qui présente un \acrshort{gpu} virtuel à la \acrshort{vm}. Couplé à \textbf{virgl} (renderer côté hôte), il permet à une \acrshort{vm} d'exécuter des appels OpenGL qui sont retransmis à un \acrshort{gpu} physique du nœud. Cette pile fournit le chemin de virtualisation \emph{léger} qui complète --- et concurrence dans certains cas --- le passthrough VFIO. Notre \texttt{gpu\_virgl\_bridge.rs} consolide ce chemin pour multiplexer plusieurs \acrshort{vm}s consommatrices virgl.
+
+\subsection{Reset GPU et leader-election}
+
+Lorsque plusieurs \acrshort{vm}s partagent un même \acrshort{gpu} en alternance (\emph{time-multiplexing}), le passage d'une \acrshort{vm} à l'autre exige un \emph{reset matériel} du \acrshort{gpu} pour garantir que l'état (contexte, mémoire vidéo) de la \acrshort{vm} sortante n'est pas visible par la \acrshort{vm} entrante. Le \texttt{ioctl} \texttt{VFIO\_DEVICE\_RESET} accomplit ce reset \emph{sans nécessiter de module noyau additionnel}.
+
+Pour éviter que plusieurs processus tentent simultanément de reseter le même \acrshort{gpu} (situation potentiellement destructrice), une \emph{leader-election} est nécessaire. Notre système emploie le mécanisme léger \texttt{flock(2)} sur un fichier \texttt{/run/omega-gpu-scheduler-<pci>.lock} : le premier processus qui acquiert le verrou exclusif devient le \emph{leader} et orchestre les transitions de \acrshort{vm}s ; les autres processus restent en attente passive.
+
+% -----------------------------------------------------------------------------
+\section{Migration de machines virtuelles}
+\label{sec:migration-vm}
+
+\subsection{Live migration KVM : pre-copy et dirty bitmap}
+
+La \emph{migration live} d'une \acrshort{vm} consiste à la déplacer d'un nœud source vers un nœud cible \emph{sans interruption visible} pour le \emph{guest}. KVM/QEMU implémentent l'algorithme classique \emph{pre-copy}~\cite{clark_2005} en cinq phases :
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Énumération initiale.} La totalité de la mémoire \emph{guest} est marquée pour transfert.
+    \item \textbf{Itération de copie.} La mémoire est copiée par chunks vers le nœud cible. Pendant ce temps, la \acrshort{vm} continue de s'exécuter et certaines pages sont modifiées (\emph{dirty pages}).
+    \item \textbf{Suivi des dirty pages.} Le noyau maintient un \emph{dirty bitmap} qui marque les pages réécrites depuis le début de la copie. À la fin de chaque itération, seules les pages encore \emph{dirty} sont retransférées.
+    \item \textbf{Convergence.} L'itération continue jusqu'à ce que le \emph{dirty rate} (pages réécrites par seconde) devienne inférieur au \emph{bandwidth rate} (pages transférables par seconde). Si la convergence échoue, deux options : abandonner la migration, ou forcer un \emph{stop-the-world} en acceptant un downtime plus long.
+    \item \textbf{Bascule finale.} La \acrshort{vm} est mise en pause sur le nœud source, les dernières pages \emph{dirty} et l'état des registres sont transférés, puis la \acrshort{vm} reprend son exécution sur le nœud cible. Le downtime typique est inférieur à une seconde.
+\end{enumerate}
+
+La technique alternative \emph{post-copy}~\cite{hines_2009} repose sur le rapatriement à la demande après bascule mais reste hors de notre périmètre. La \emph{migration cold} consiste, elle, à arrêter complètement la \acrshort{vm} sur le nœud source, copier sa mémoire (et ses disques si non partagés) puis la redémarrer sur le nœud cible. Le downtime est de plusieurs dizaines de secondes mais le mécanisme converge dans tous les cas, là où la migration live peut échouer si le \emph{dirty rate} est trop élevé.
+
+Proxmox encapsule ces deux modes sous une commande unique : \texttt{qm migrate <vmid> <target> [--online]} (avec \texttt{--online} pour le mode live). Notre \texttt{vm\_migration.rs} appelle cette commande et suit son progrès via le \emph{task ID} retourné.
+
+\subsection{Politiques de placement}
+
+Le choix du nœud cible d'une migration --- ou plus généralement, du nœud d'admission d'une nouvelle \acrshort{vm} --- est gouverné par une \emph{politique de placement}. Les familles classiques sont :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Bin-packing} : tasser les \acrshort{vm}s sur le minimum de nœuds pour permettre d'éteindre les nœuds vides. Optimal énergétiquement, mais désastreux en cas de pic de charge soudain.
+    \item \textbf{Load-aware} : équilibrer la charge en plaçant chaque nouvelle \acrshort{vm} sur le nœud le moins chargé. Maximise la marge instantanée, mais favorise des migrations futures lorsque les charges divergent.
+    \item \textbf{Topology-aware} : tenir compte de la topologie réseau (\emph{même rack}, \emph{même zone}, \emph{cross-zone}) pour minimiser la latence inter-\acrshort{vm}s d'une application distribuée.
+    \item \textbf{Multi-critères pondéré}~\cite{gulati_2012_drs,verma_2015_borg} : agréger les signaux ci-dessus dans un score $S(n)$ pour chaque nœud, et choisir le maximum. C'est l'approche retenue par les orchestrateurs grand public (VMware DRS, Google Borg).
+\end{itemize}
+
+Notre score, exposé dans le chapitre~\ref{chap:conception}, combine les quatre critères : mémoire libre (50~\%), topologie (25~\%), charge CPU (15~\%) et nombre de migrations actives (10~\%). Cette pondération a été itérée empiriquement sur le cluster GRID~ZERO.
+
+% -----------------------------------------------------------------------------
+\section{Sécurité du canal et modèle de confiance}
+\label{sec:tls-tofu}
+
+\subsection{TLS 1.3 et rustls}
+
+Le canal inter-nœuds transporte des pages mémoire de \acrshort{vm}s : leur confidentialité et leur intégrité sont des exigences évidentes. Nous adoptons \textbf{TLS~1.3} (RFC~8446) avec la bibliothèque \texttt{rustls}~\cite{rustls_crate}, qui présente trois avantages : (i) absence de support des protocoles dépréciés (TLS~1.0/1.1) qui élimine les attaques par dégradation ; (ii) implémentation en Rust pur exempte des classes classiques de bugs C (\emph{Heartbleed} et consorts) ; (iii) intégration native avec Tokio.
+
+\subsection{TOFU : \emph{Trust On First Use}}
+
+L'usage d'une \emph{Public Key Infrastructure} (PKI) complète --- avec autorité de certification, signature et révocation --- serait disproportionné dans un cluster fermé de trois à dix nœuds. Nous adoptons le modèle \textbf{TOFU} (\emph{Trust On First Use}, popularisé par SSH) : à la première connexion entre deux nœuds, l'empreinte SHA-256 du certificat de la pair est enregistrée. Aux connexions suivantes, l'empreinte présentée est comparée à l'empreinte enregistrée ; toute divergence est traitée comme une attaque \emph{man-in-the-middle} et déclenche le rejet de la connexion.
+
+Le modèle TOFU est correct si la \emph{première} connexion se fait dans un environnement de confiance --- typiquement, lors du déploiement initial du cluster. Au sein de \emph{GRID ONE}, ce déploiement initial se fait par l'équipe ATLAS sur un VLAN management isolé.
+
+% -----------------------------------------------------------------------------
+\section{Synthèse comparative et positionnement}
+\label{sec:synthese-cmp}
+
+Le tableau~\ref{tab:cmp-proxmox-vs} récapitule, pour chacun des quatre verrous identifiés dans l'introduction, l'état natif de Proxmox~VE, les solutions alternatives existantes sur le marché, et le choix retenu par \emph{omega-remote-paging}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{2.4cm}p{3.6cm}p{3.6cm}p{4.0cm}}
+\toprule
+\textbf{Verrou} & \textbf{Proxmox natif} & \textbf{Alternatives marché} & \textbf{FusionCore (ce travail)} \\
+\midrule
+RAM cloisonnée & Refus d'admission si nœud saturé & Infiniswap (RDMA), Fastswap & Paging distant userfaultfd sur TCP/TLS \\
+\addlinespace
+vCPU statiques & Pas de hotplug automatique & VMware DRS (propriétaire) & Scheduler élastique cgroups + QMP \\
+\addlinespace
+GPU exclusif & VFIO passthrough monopolisé & NVIDIA vGPU (licence) & Multiplexeur DRM + leader-election flock \\
+\addlinespace
+I/O à l'aveugle & Aucun arbitrage métier & Pas de standard cluster & Pondération \texttt{io.weight} adaptative PSI \\
+\bottomrule
+\end{tabular}
+\caption{Comparatif des verrous Proxmox et solutions adoptées.}
+\label{tab:cmp-proxmox-vs}
+\end{table}
+
+\section*{Conclusion du chapitre}
+
+Le chapitre a balayé les briques techniques sur lesquelles s'appuie le système : virtualisation Proxmox/KVM/QEMU/QMP, modèle mémoire Linux et \texttt{userfaultfd}, cgroups~v2 et PSI, partage de GPU (VFIO, vGPU, DRM), migration live et politiques de placement, sécurité du canal par TLS+TOFU. Les travaux antérieurs sur la \emph{disaggregated memory} (Infiniswap, LegoOS, Carbink) ont été passés en revue et le positionnement de \emph{FusionCore} précisé : approche userspace pure, transport TCP/TLS, cible cluster Proxmox premier-citoyen. Le chapitre suivant entre dans la conception détaillée du système.

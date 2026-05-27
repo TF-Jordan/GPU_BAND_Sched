@@ -1,0 +1,159 @@
+% =============================================================================
+% ANNEXE A — PROTOCOLE BINAIRE
+% =============================================================================
+\chapter{Spécification du protocole binaire}
+\label{annexe:protocole}
+
+Cette annexe consigne la spécification complète du protocole binaire inter-nœuds utilisé par \emph{omega-remote-paging}. Elle est destinée à un éventuel ré-implémenteur (par exemple, pour ajouter un client de test en Python ou un backend store écrit dans un autre langage).
+
+\section{Format d'en-tête}
+
+Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~octets fixes}, suivi d'un payload variable. Tous les champs multi-octets sont en \emph{big-endian} (convention réseau).
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{rrlp{7cm}}
+\toprule
+\textbf{Offset} & \textbf{Taille} & \textbf{Champ} & \textbf{Description} \\
+\midrule
+0  & 2 & \texttt{magic}        & \texttt{0x524D} (\og{}RM\fg{} --- Remote Memory) --- identifiant du protocole \\
+2  & 1 & \texttt{opcode}       & Type de message (voir tableau~\ref{tab:opcodes-req} et \ref{tab:opcodes-rsp}) \\
+3  & 1 & \texttt{flags}        & Bit~0 (\texttt{0x01}) : page compressée LZ4 ; bits 1--7 réservés \\
+4  & 4 & \texttt{vm\_id}       & Identifiant de la VM (\texttt{u32} BE) \\
+8  & 8 & \texttt{page\_id}     & Identifiant de la page dans la VM (\texttt{u64} BE) \\
+16 & 4 & \texttt{payload\_len} & Taille du payload en octets (\texttt{u32} BE) \\
+20 & * & \texttt{payload}      & Données (page, message d'erreur ou JSON) \\
+\bottomrule
+\end{tabular}
+\caption{Format d'en-tête du protocole inter-nœuds.}
+\end{table}
+
+\section{Contraintes}
+
+\begin{itemize}[leftmargin=*]
+    \item Taille de page : \texttt{PAGE\_SIZE = 4096} octets.
+    \item Taille maximale d'un payload simple : \texttt{MAX\_PAYLOAD = 8192} octets (\texttt{2 $\times$ PAGE\_SIZE}, protection DoS).
+    \item Taille maximale d'un payload batch : \texttt{MAX\_BATCH\_PAYLOAD = 262 144} octets (64 pages au plus).
+    \item Pour \texttt{PUT\_PAGE} : \texttt{payload\_len} doit être exactement 4096 (sauf si \texttt{FLAG\_COMPRESSED} actif, auquel cas le payload est \texttt{[u32~BE original\_len][lz4\_data...]}).
+    \item Compression activée si \texttt{payload.len() $\ge$ COMPRESS\_MIN\_LEN = 64} octets et si la version compressée est strictement plus courte.
+\end{itemize}
+
+\section{Tableau des opcodes}
+
+\subsection{Requêtes (client $\to$ store)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrlp{7cm}}
+\toprule
+\textbf{Opcode} & \textbf{Valeur} & \textbf{Payload requête} & \textbf{Description} \\
+\midrule
+\texttt{PING}            & \texttt{0x01} & ---             & Vérification de connectivité \\
+\texttt{PUT\_PAGE}       & \texttt{0x10} & 4096 octets     & Stocke une page (vm\_id, page\_id) $\to$ data \\
+\texttt{GET\_PAGE}       & \texttt{0x11} & ---             & Récupère la page (vm\_id, page\_id) \\
+\texttt{DELETE\_PAGE}    & \texttt{0x12} & ---             & Supprime la page (vm\_id, page\_id) \\
+\texttt{BATCH\_PUT\_PAGE}& \texttt{0x13} & $N \times$ (u64 + 4096) & Stocke N pages d'une même VM \\
+\texttt{STATS\_REQUEST}  & \texttt{0x20} & ---             & Demande des statistiques du store \\
+\bottomrule
+\end{tabular}
+\caption{Opcodes de requête.}
+\label{tab:opcodes-req}
+\end{table}
+
+\subsection{Réponses (store $\to$ client)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrlp{7cm}}
+\toprule
+\textbf{Opcode} & \textbf{Valeur} & \textbf{Payload} & \textbf{Description} \\
+\midrule
+\texttt{PONG}            & \texttt{0x02} & ---             & Réponse à PING \\
+\texttt{STATS\_RESPONSE} & \texttt{0x21} & JSON UTF-8      & Statistiques du store \\
+\texttt{OK}              & \texttt{0x80} & variable        & Opération réussie (+ données si GET) \\
+\texttt{NOT\_FOUND}      & \texttt{0x81} & ---             & Page absente du store \\
+\texttt{ERROR}           & \texttt{0x82} & message UTF-8   & Erreur (message texte dans payload) \\
+\texttt{BATCH\_PUT\_OK}  & \texttt{0x83} & ---             & \texttt{page\_id} = \texttt{(failed $\ll$ 32) | stored} \\
+\bottomrule
+\end{tabular}
+\caption{Opcodes de réponse.}
+\label{tab:opcodes-rsp}
+\end{table}
+
+\section{Séquences canoniques}
+
+\subsection{PING / PONG}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+Client                                  Store
+  | -- PING (vm_id=0, page_id=0) ------>|
+  | <- PONG ----------------------------|
+\end{lstlisting}
+
+\subsection{PUT\_PAGE (succès et plein)}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+Client                                  Store
+  | -- PUT_PAGE (vm_id=42, page_id=1234, payload=4096o) ->|
+  | <- OK (vm_id=42, page_id=1234) ------------------------|
+                                                    [page stockee]
+
+  | -- PUT_PAGE (store plein) ----------------------------->|
+  | <- ERROR ("store plein, max_pages atteint") -----------|
+\end{lstlisting}
+
+\subsection{GET\_PAGE}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+Client                                  Store
+  | -- GET_PAGE (vm_id=42, page_id=1234) -->|
+  | <- OK + payload (4096 o) ---------------|
+
+  | -- GET_PAGE (page inconnue) ----------->|
+  | <- NOT_FOUND --------------------------|
+\end{lstlisting}
+
+\subsection{STATS}
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+Client                                  Store
+  | -- STATS_REQUEST ---------------------->|
+  | <- STATS_RESPONSE -----------------------|
+        payload = {
+          "node_id": "node-b",
+          "pages_stored": 1024,
+          "estimated_bytes": 4194304,
+          "put_count": 2000,
+          "get_count": 1500,
+          "hit_count": 1480,
+          "miss_count": 20,
+          "hit_rate_pct": 98.7,
+          "active_connections": 2,
+          "disk_available_mib": 102400,
+          "ceph_enabled": false
+        }
+\end{lstlisting}
+
+\section{Gestion des erreurs réseau}
+
+\subsection{Côté client}
+
+\begin{itemize}[leftmargin=*]
+    \item Timeout configurable (défaut 2000~ms) sur connexion, lecture et écriture.
+    \item En cas d'erreur : la connexion est marquée invalide, reconnexion automatique au prochain appel.
+    \item Comportement de secours pour les défauts de page : injection d'une page zéro si le store est injoignable (la VM continue avec des données potentiellement incorrectes, l'événement est journalisé en WARNING).
+\end{itemize}
+
+\subsection{Côté serveur}
+
+\begin{itemize}[leftmargin=*]
+    \item Connexion reset ou EOF : journalisé en DEBUG (comportement normal).
+    \item Erreurs protocole (magic incorrect, opcode inconnu, payload trop grand) : réponse \texttt{ERROR} puis fermeture connexion.
+\end{itemize}
+
+\section{TLS et empreinte TOFU}
+
+Le canal port 9100 est obligatoirement chiffré par TLS~1.3 (bibliothèque \texttt{rustls}). Les certificats sont auto-signés et générés à la première initialisation du démon (bibliothèque \texttt{rcgen}). L'identité du pair est vérifiée par empreinte SHA-256 du certificat (\emph{Trust On First Use}) : la première empreinte observée pour un \texttt{(host, port)} donné est enregistrée dans \texttt{/var/lib/omega/tofu/<peer\_id>.fp} ; aux connexions suivantes, toute divergence d'empreinte entraîne le rejet de la connexion et la journalisation d'une alerte.
