@@ -1,0 +1,721 @@
+\documentclass[12pt,a4paper]{article}
+
+% =====================
+% Encodage et langue
+% =====================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{csquotes}
+
+% =====================
+% Mise en page
+% =====================
+\usepackage{geometry}
+\geometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{newtxtext,newtxmath}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{graphicx}
+\usepackage{float}
+
+% =====================
+% Couleurs
+% =====================
+\definecolor{mainblue}{RGB}{25,70,130}
+\definecolor{lightgray}{RGB}{245,245,245}
+\definecolor{darkgray}{RGB}{60,60,60}
+
+% =====================
+% Hyperliens
+% =====================
+\hypersetup{
+    colorlinks=true,
+    linkcolor=mainblue,
+    urlcolor=mainblue,
+    citecolor=mainblue,
+    pdftitle={Création et utilisation d'ISO Ubuntu personnalisées avec CUBIC},
+    pdfauthor={Nom du rédacteur}
+}
+
+% =====================
+% En-têtes et pieds de page
+% =====================
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{ISO Ubuntu personnalisées}
+\rhead{CUBIC}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% =====================
+% Style des titres
+% =====================
+\titleformat{\section}{\large\bfseries\color{mainblue}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{darkgray}}{\thesubsection}{0.7em}{}
+
+% =====================
+% Style des codes
+% =====================
+\lstdefinestyle{bashstyle}{
+    backgroundcolor=\color{lightgray},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    rulecolor=\color{darkgray},
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false
+}
+\lstset{style=bashstyle}
+
+% =====================
+% Informations à modifier
+% =====================
+\newcommand{\Auteur}{le groupe OMEGA}
+\newcommand{\Institution}{École Nationale Supérieure Polytechnique de Yaoundé}
+\newcommand{\Projet}{Personnalisation d'ISO Ubuntu Server}
+\newcommand{\DateRapport}{\today}
+
+\begin{document}
+
+% =====================
+% Page de garde
+% =====================
+\begin{titlepage}
+    \centering
+    \vspace*{1cm}
+    {\Large \textbf{\Institution}}\\[1.2cm]
+    {\Large \textbf{\Projet}}\\[0.8cm]
+    \rule{0.85\textwidth}{0.6pt}\\[0.6cm]
+    {\Huge \textbf{Création et guide d'utilisation d'ISO Ubuntu personnalisées avec CUBIC}}\\[0.6cm]
+    \rule{0.85\textwidth}{0.6pt}\\[1.2cm]
+    
+    \begin{flushleft}
+        \textbf{Rédigé par :} \Auteur\\[0.3cm]
+        \textbf{Type de document :} Rapport technique et guide utilisateur\\[0.3cm]
+        \textbf{Outil principal :} CUBIC -- Custom Ubuntu ISO Creator\\[0.3cm]
+        \textbf{Système de base :} Ubuntu Server\\[0.3cm]
+        \textbf{Date :} \DateRapport
+    \end{flushleft}
+    
+    \vfill
+    {\large Année académique : 2025--2026}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% =====================
+\section{Introduction}
+
+Dans le cadre de la mise en place d'un environnement système adapté aux besoins de développement, de virtualisation, d'utilisation graphique et de machine learning, plusieurs images ISO personnalisées ont été créées à partir d'images officielles Ubuntu Server. L'objectif était de disposer de systèmes prêts à l'emploi, intégrant dès l'installation les paquets, outils, configurations et services nécessaires à chaque usage.
+
+Pour réaliser cette personnalisation, l'outil \textbf{CUBIC} a été utilisé. CUBIC, pour \textit{Custom Ubuntu ISO Creator}, permet de modifier une image ISO Ubuntu en ouvrant un environnement de type \textit{chroot}. Cet environnement permet d'installer des logiciels, de modifier des fichiers système, d'ajouter des scripts, puis de reconstruire une nouvelle image ISO amorçable.
+
+Les ISO créées sont principalement réparties en trois catégories :
+\begin{itemize}[label=--]
+    \item des ISO orientées \textbf{développement}, contenant les outils nécessaires pour programmer et administrer des systèmes ;
+    \item des ISO avec \textbf{interface graphique}, adaptées aux utilisateurs ayant besoin d'un environnement de bureau ;
+    \item des ISO orientées \textbf{machine learning}, intégrant des outils scientifiques, Python, des bibliothèques de calcul et des environnements de travail adaptés.
+\end{itemize}
+
+% =====================
+\section{Objectifs de la personnalisation}
+
+La création de ces ISO personnalisées répond à plusieurs objectifs techniques et pratiques :
+
+\begin{itemize}[label=--]
+    \item réduire le temps d'installation et de configuration après le déploiement d'Ubuntu ;
+    \item disposer d'environnements homogènes sur plusieurs machines physiques ou virtuelles ;
+    \item automatiser l'installation des outils couramment utilisés ;
+    \item préparer des systèmes spécialisés selon les besoins : développement, interface graphique ou machine learning ;
+    \item faciliter les tests dans des machines virtuelles avant un déploiement réel ;
+    \item limiter les erreurs de configuration manuelle après installation.
+\end{itemize}
+
+Ces ISO permettent donc de passer d'une installation Ubuntu Server classique à une installation directement exploitable selon le profil d'utilisation visé.
+
+% =====================
+\section{Présentation de l'outil CUBIC}
+
+\subsection{Définition}
+
+CUBIC est un outil graphique permettant de personnaliser des images ISO Ubuntu ou dérivées d'Ubuntu. Il permet de charger une image ISO source, de modifier son système de fichiers interne, puis de générer une nouvelle image ISO personnalisée.
+
+L'intérêt principal de CUBIC est qu'il simplifie le processus de personnalisation en évitant d'utiliser manuellement des commandes complexes de montage, extraction, compression et reconstruction d'image ISO.
+
+\subsection{Principe général de fonctionnement}
+
+Le fonctionnement de CUBIC peut être résumé comme suit :
+
+\begin{enumerate}
+    \item sélection d'une ISO Ubuntu Server officielle comme base ;
+    \item création d'un projet CUBIC contenant les fichiers extraits de l'ISO ;
+    \item ouverture d'un terminal dans l'environnement \textit{chroot} de l'ISO ;
+    \item installation de paquets, modification de fichiers et ajout de scripts ;
+    \item nettoyage de l'environnement pour réduire la taille de l'image finale ;
+    \item génération d'une nouvelle ISO personnalisée ;
+    \item test de l'ISO dans une machine virtuelle avant utilisation réelle.
+\end{enumerate}
+
+\subsection{Avantages de CUBIC}
+
+\begin{itemize}[label=--]
+    \item interface simple et adaptée aux personnalisations rapides ;
+    \item possibilité d'installer directement les paquets dans l'image ;
+    \item modification des fichiers de configuration avant installation ;
+    \item reconstruction automatique de l'ISO ;
+    \item gain de temps pour les déploiements répétés ;
+    \item possibilité de créer plusieurs variantes à partir d'une même base Ubuntu.
+\end{itemize}
+
+% =====================
+\section{Environnement de travail utilisé}
+
+Le travail de personnalisation a été réalisé dans un environnement Linux, à partir d'images Ubuntu Server. Le tableau suivant présente les principaux éléments utilisés.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{>{\bfseries}p{5cm}p{9cm}}
+\toprule
+Élément & Description \\
+\midrule
+Système hôte & Ubuntu ou distribution Linux compatible \\
+Outil de personnalisation & CUBIC \\
+ISO de base & Ubuntu Server, version à préciser \\
+Type de sortie & Images ISO personnalisées amorçables \\
+Tests & Machine virtuelle, par exemple KVM, VirtualBox, VMware ou Proxmox \\
+Usages visés & Développement, interface graphique, machine learning \\
+\bottomrule
+\end{tabular}
+\caption{Environnement général de création des ISO personnalisées}
+\end{table}
+
+% =====================
+\section{Méthodologie générale de création des ISO}
+
+\subsection{Étape 1 : récupération de l'ISO Ubuntu Server}
+
+La première étape consiste à télécharger une image ISO Ubuntu Server officielle. Cette image sert de base pour toutes les personnalisations. Il est conseillé de conserver une copie intacte de l'ISO originale afin de pouvoir recommencer la personnalisation en cas d'erreur.
+
+Après le téléchargement, il est recommandé de vérifier l'intégrité de l'image ISO à l'aide d'une somme de contrôle.
+
+\begin{lstlisting}
+sha256sum ubuntu-server.iso
+\end{lstlisting}
+
+Cette vérification permet de s'assurer que l'image n'est pas corrompue avant de l'utiliser dans CUBIC.
+
+\subsection{Étape 2 : création d'un projet CUBIC}
+
+Une fois CUBIC lancé, un nouveau projet est créé. Ce projet contient les fichiers temporaires extraits de l'image ISO. Il est important de choisir un dossier disposant d'un espace disque suffisant, car CUBIC extrait puis reconstruit l'image.
+
+Les informations généralement renseignées sont :
+
+\begin{itemize}[label=--]
+    \item le chemin du projet ;
+    \item l'image ISO source ;
+    \item le nom de la nouvelle ISO ;
+    \item le volume ou label de l'image personnalisée ;
+    \item la description de la variante créée.
+\end{itemize}
+
+\subsection{Étape 3 : modification de l'environnement chroot}
+
+CUBIC ouvre ensuite un terminal dans l'environnement interne de l'ISO. Cet environnement permet d'exécuter des commandes comme si l'on était déjà dans le futur système installé.
+
+Les premières commandes consistent généralement à mettre à jour la liste des paquets :
+
+\begin{lstlisting}
+apt update
+\end{lstlisting}
+
+Selon les besoins, il est ensuite possible d'installer des outils, de supprimer des paquets inutiles ou de modifier des fichiers de configuration.
+
+\subsection{Étape 4 : installation des paquets nécessaires}
+
+Les paquets sont installés directement dans l'image ISO personnalisée. Par exemple, pour une ISO de développement :
+
+\begin{lstlisting}
+apt install -y git curl wget vim nano build-essential openssh-server
+\end{lstlisting}
+
+Pour une ISO avec interface graphique :
+
+\begin{lstlisting}
+apt install -y ubuntu-desktop-minimal gdm3 network-manager
+\end{lstlisting}
+
+Pour une ISO orientée machine learning :
+
+\begin{lstlisting}
+apt install -y python3 python3-pip python3-venv python3-dev \
+    build-essential git curl wget jupyter-notebook
+\end{lstlisting}
+
+Il est également possible d'ajouter des bibliothèques Python avec \texttt{pip}, par exemple :
+
+\begin{lstlisting}
+pip3 install numpy pandas matplotlib scikit-learn jupyterlab
+\end{lstlisting}
+
+\subsection{Étape 5 : ajout de scripts personnalisés}
+
+Des scripts peuvent être ajoutés dans l'ISO afin de faciliter les opérations après installation. Par exemple, un script de post-installation peut être placé dans le répertoire \texttt{/usr/local/bin}.
+
+\begin{lstlisting}
+nano /usr/local/bin/post-install.sh
+chmod +x /usr/local/bin/post-install.sh
+\end{lstlisting}
+
+Exemple de contenu possible :
+
+\begin{lstlisting}
+#!/bin/bash
+apt update
+echo "Systeme personnalise pret a l'emploi."
+\end{lstlisting}
+
+Ce type de script peut servir à finaliser certaines configurations qui dépendent de la machine cible.
+
+\subsection{Étape 6 : nettoyage de l'image}
+
+Avant de générer l'ISO finale, il est conseillé de nettoyer les caches de paquets pour réduire la taille de l'image.
+
+\begin{lstlisting}
+apt clean
+autoremove -y
+rm -rf /var/lib/apt/lists/*
+rm -rf /tmp/*
+\end{lstlisting}
+
+Ce nettoyage permet d'éviter de générer une image inutilement lourde.
+
+\subsection{Étape 7 : génération de l'ISO personnalisée}
+
+Après les modifications, CUBIC permet de passer à l'étape suivante, de sélectionner les composants à conserver, puis de reconstruire l'image ISO finale. L'image générée porte généralement un nom personnalisé permettant d'identifier son usage.
+
+Exemples de noms :
+
+\begin{itemize}[label=--]
+    \item \texttt{ubuntu-server-dev-custom.iso} ;
+    \item \texttt{ubuntu-server-gui-custom.iso} ;
+    \item \texttt{ubuntu-server-ml-custom.iso}.
+\end{itemize}
+
+\subsection{Étape 8 : test de l'ISO}
+
+Avant d'utiliser une ISO sur une machine réelle, il est recommandé de la tester dans une machine virtuelle. Ce test permet de vérifier :
+
+\begin{itemize}[label=--]
+    \item le démarrage de l'ISO ;
+    \item le bon déroulement de l'installation ;
+    \item la présence des paquets installés ;
+    \item le fonctionnement du réseau ;
+    \item l'accès SSH ;
+    \item le fonctionnement de l'interface graphique, si elle est présente ;
+    \item le fonctionnement des outils de développement ou de machine learning.
+\end{itemize}
+
+% =====================
+\section{Description des ISO créées}
+
+\subsection{ISO de développement}
+
+L'ISO de développement a été conçue pour fournir rapidement un environnement de programmation et d'administration système. Elle contient les outils nécessaires pour travailler sur des projets logiciels, administrer des machines Linux, utiliser Git, compiler du code et accéder à distance à la machine.
+
+\subsubsection*{Paquets et outils intégrés}
+
+\begin{itemize}[label=--]
+    \item \texttt{git} pour la gestion de versions ;
+    \item \texttt{curl} et \texttt{wget} pour les téléchargements ;
+    \item \texttt{vim} et \texttt{nano} pour l'édition de fichiers ;
+    \item \texttt{build-essential} pour la compilation ;
+    \item \texttt{openssh-server} pour l'administration à distance ;
+    \item outils réseau de base pour le diagnostic et la configuration.
+\end{itemize}
+
+\subsubsection*{Usage prévu}
+
+Cette ISO est adaptée aux développeurs, administrateurs système et étudiants qui souhaitent disposer rapidement d'un environnement Ubuntu prêt pour le développement logiciel et les tests.
+
+\subsection{ISO avec interface graphique}
+
+L'ISO avec interface graphique a été créée pour fournir une expérience utilisateur plus accessible que l'installation serveur classique. Elle ajoute un environnement de bureau à Ubuntu Server afin de permettre une utilisation graphique directe.
+
+\subsubsection*{Éléments intégrés}
+
+\begin{itemize}[label=--]
+    \item environnement graphique minimal ;
+    \item gestionnaire de connexion ;
+    \item gestion du réseau via une interface graphique ;
+    \item outils de base pour l'utilisation bureautique et système.
+\end{itemize}
+
+\subsubsection*{Usage prévu}
+
+Cette ISO est utile pour les utilisateurs qui souhaitent bénéficier de la stabilité d'une base Ubuntu Server tout en disposant d'une interface graphique pour l'administration, la navigation, l'édition de fichiers ou les tests.
+
+\subsection{ISO orientée machine learning}
+
+L'ISO machine learning a été conçue pour préparer un environnement destiné au calcul scientifique, à l'analyse de données et à l'apprentissage automatique. Elle contient les outils Python et les bibliothèques nécessaires pour démarrer rapidement des travaux de traitement de données.
+
+\subsubsection*{Paquets et bibliothèques intégrés}
+
+\begin{itemize}[label=--]
+    \item \texttt{python3}, \texttt{python3-pip}, \texttt{python3-venv} ;
+    \item \texttt{numpy} pour le calcul numérique ;
+    \item \texttt{pandas} pour la manipulation de données ;
+    \item \texttt{matplotlib} pour la visualisation ;
+    \item \texttt{scikit-learn} pour les algorithmes classiques de machine learning ;
+    \item \texttt{jupyterlab} ou \texttt{jupyter-notebook} pour les notebooks interactifs.
+\end{itemize}
+
+\subsubsection*{Usage prévu}
+
+Cette ISO est destinée aux travaux pratiques, aux projets d'intelligence artificielle, aux tests de modèles, à l'analyse de données et à l'enseignement du machine learning.
+
+% =====================
+\section{Guide d'utilisation des ISO créées}
+
+\subsection{Préparation de la machine cible}
+
+Avant d'utiliser une ISO personnalisée, il faut vérifier que la machine cible possède les ressources minimales nécessaires. Les besoins varient selon le type d'ISO.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{p{4cm}p{4cm}p{6cm}}
+\toprule
+Type d'ISO & Ressources minimales conseillées & Remarques \\
+\midrule
+ISO développement & 2 Go RAM, 20 Go disque & Convient aux machines modestes \\
+ISO graphique & 4 Go RAM, 30 Go disque & L'interface graphique consomme plus de ressources \\
+ISO machine learning & 8 Go RAM, 40 Go disque & Plus de ressources recommandées pour les notebooks et calculs \\
+\bottomrule
+\end{tabular}
+\caption{Ressources minimales recommandées selon le type d'ISO}
+\end{table}
+
+\subsection{Création d'une clé USB bootable}
+
+Pour installer l'ISO sur une machine physique, il faut créer une clé USB amorçable. Sous Linux, la commande \texttt{dd} peut être utilisée avec prudence.
+
+\begin{lstlisting}
+lsblk
+sudo dd if=nom_de_l_iso.iso of=/dev/sdX bs=4M status=progress oflag=sync
+\end{lstlisting}
+
+\textbf{Attention :} il faut remplacer \texttt{/dev/sdX} par le périphérique correspondant à la clé USB. Une erreur peut effacer un disque dur du système.
+
+Il est aussi possible d'utiliser des outils graphiques comme Balena Etcher, Rufus ou GNOME Disks.
+
+\subsection{Démarrage sur l'ISO}
+
+Après la création de la clé USB bootable, il faut démarrer la machine sur cette clé. Cela se fait généralement à partir du menu de démarrage du BIOS ou de l'UEFI.
+
+Les touches courantes sont : \texttt{F2}, \texttt{F9}, \texttt{F10}, \texttt{F12}, \texttt{Esc} ou \texttt{Del}, selon le constructeur de la machine.
+
+\subsection{Installation du système}
+
+L'installation se déroule comme une installation Ubuntu classique. La différence est que les paquets et configurations ajoutés dans CUBIC sont déjà présents dans le système installé ou disponibles dans l'environnement personnalisé.
+
+Les étapes générales sont :
+
+\begin{enumerate}
+    \item choisir la langue et le clavier ;
+    \item configurer le réseau ;
+    \item choisir le disque d'installation ;
+    \item créer l'utilisateur principal ;
+    \item lancer l'installation ;
+    \item redémarrer la machine après installation.
+\end{enumerate}
+
+\subsection{Vérifications après installation}
+
+Après le premier démarrage, il faut vérifier que les éléments personnalisés sont bien présents.
+
+\subsubsection*{Vérifier la version du système}
+
+\begin{lstlisting}
+lsb_release -a
+uname -a
+\end{lstlisting}
+
+\subsubsection*{Vérifier les paquets installés}
+
+\begin{lstlisting}
+git --version
+python3 --version
+pip3 --version
+ssh -V
+\end{lstlisting}
+
+\subsubsection*{Vérifier le service SSH}
+
+\begin{lstlisting}
+systemctl status ssh
+ip a
+\end{lstlisting}
+
+Si le service SSH n'est pas actif, il peut être activé avec :
+
+\begin{lstlisting}
+sudo systemctl enable --now ssh
+\end{lstlisting}
+
+\subsubsection*{Vérifier Jupyter pour l'ISO machine learning}
+
+\begin{lstlisting}
+jupyter lab --version
+jupyter notebook --version
+\end{lstlisting}
+
+Pour lancer Jupyter Lab :
+
+\begin{lstlisting}
+jupyter lab --ip=0.0.0.0 --no-browser
+\end{lstlisting}
+
+\subsubsection*{Vérifier l'interface graphique}
+
+Pour une ISO avec interface graphique, il faut vérifier que le gestionnaire graphique est actif :
+
+\begin{lstlisting}
+systemctl status gdm3
+\end{lstlisting}
+
+Si l'interface graphique ne démarre pas automatiquement :
+
+\begin{lstlisting}
+sudo systemctl set-default graphical.target
+sudo reboot
+\end{lstlisting}
+
+% =====================
+\section{Guide d'utilisation par profil d'ISO}
+
+\subsection{Utilisation de l'ISO de développement}
+
+Après installation, l'utilisateur peut directement cloner un dépôt Git, compiler un projet ou se connecter à distance à la machine.
+
+Exemple de test rapide :
+
+\begin{lstlisting}
+git clone https://exemple.com/projet.git
+cd projet
+make
+\end{lstlisting}
+
+Pour accéder à la machine à distance :
+
+\begin{lstlisting}
+ssh utilisateur@adresse_ip_de_la_machine
+\end{lstlisting}
+
+Cette ISO est particulièrement utile pour préparer rapidement des postes de développement ou des machines de test.
+
+\subsection{Utilisation de l'ISO graphique}
+
+Après installation, le système démarre sur une interface graphique. L'utilisateur peut se connecter avec le compte créé pendant l'installation et utiliser le système comme une distribution Ubuntu classique.
+
+Les usages possibles sont :
+
+\begin{itemize}[label=--]
+    \item administration système avec interface graphique ;
+    \item navigation web ;
+    \item édition de fichiers ;
+    \item accès aux terminaux ;
+    \item tests d'applications nécessitant une interface graphique.
+\end{itemize}
+
+\subsection{Utilisation de l'ISO machine learning}
+
+Après installation, l'environnement Python est disponible. Il est conseillé de travailler dans un environnement virtuel pour chaque projet.
+
+\begin{lstlisting}
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+\end{lstlisting}
+
+Exemple de test Python :
+
+\begin{lstlisting}
+python3 - <<'PY'
+import numpy as np
+import pandas as pd
+import sklearn
+print("Environnement machine learning operationnel")
+PY
+\end{lstlisting}
+
+Pour utiliser Jupyter :
+
+\begin{lstlisting}
+jupyter lab --ip=0.0.0.0 --no-browser
+\end{lstlisting}
+
+L'adresse affichée par Jupyter peut ensuite être ouverte dans un navigateur depuis la machine locale ou depuis une autre machine du réseau, selon la configuration réseau.
+
+% =====================
+\section{Bonnes pratiques de maintenance}
+
+\subsection{Nommer clairement les ISO}
+
+Chaque ISO doit avoir un nom clair, permettant d'identifier son usage, sa version et sa date de création. Exemple :
+
+\begin{lstlisting}
+ubuntu-22.04-dev-v1.iso
+ubuntu-22.04-gui-v1.iso
+ubuntu-22.04-ml-v1.iso
+\end{lstlisting}
+
+\subsection{Tenir un journal de modifications}
+
+Il est important de conserver un fichier de suivi indiquant les modifications apportées à chaque version d'ISO. Ce journal peut contenir :
+
+\begin{itemize}[label=--]
+    \item la date de création ;
+    \item l'ISO Ubuntu source ;
+    \item les paquets ajoutés ;
+    \item les fichiers modifiés ;
+    \item les scripts ajoutés ;
+    \item les tests effectués ;
+    \item les problèmes connus.
+\end{itemize}
+
+\subsection{Tester avant déploiement}
+
+Toute ISO personnalisée doit être testée dans une machine virtuelle avant d'être utilisée sur une machine physique. Ce test permet d'éviter les erreurs de démarrage, les paquets manquants ou les problèmes de configuration réseau.
+
+\subsection{Éviter les configurations trop spécifiques}
+
+Il est préférable de ne pas intégrer dans l'ISO des informations trop liées à une machine particulière, comme :
+
+\begin{itemize}[label=--]
+    \item une adresse IP fixe propre à une seule machine ;
+    \item un nom d'hôte définitif ;
+    \item des mots de passe sensibles ;
+    \item des clés privées SSH ;
+    \item des fichiers contenant des secrets.
+\end{itemize}
+
+Ces éléments doivent être configurés après installation ou via un mécanisme sécurisé.
+
+% =====================
+\section{Difficultés possibles et solutions}
+
+\begin{longtable}{p{5cm}p{9cm}}
+\toprule
+\textbf{Difficulté rencontrée} & \textbf{Solution proposée} \\
+\midrule
+L'ISO générée est trop volumineuse & Nettoyer les caches avec \texttt{apt clean}, supprimer les paquets inutiles et éviter d'intégrer des fichiers lourds. \\
+\addlinespace
+Un paquet ne s'installe pas dans CUBIC & Vérifier la connexion réseau de l'environnement chroot, exécuter \texttt{apt update}, puis réessayer. \\
+\addlinespace
+L'interface graphique ne démarre pas & Vérifier le gestionnaire graphique, activer \texttt{graphical.target} et redémarrer. \\
+\addlinespace
+SSH ne fonctionne pas après installation & Vérifier que \texttt{openssh-server} est installé et que le service \texttt{ssh} est activé. \\
+\addlinespace
+Jupyter n'est pas accessible à distance & Lancer Jupyter avec \texttt{--ip=0.0.0.0} et vérifier le pare-feu ainsi que l'adresse IP de la machine. \\
+\addlinespace
+La machine ne démarre pas sur la clé USB & Vérifier l'ordre de boot, le mode UEFI/Legacy et recréer correctement la clé USB. \\
+\bottomrule
+\caption{Difficultés possibles et actions correctives}
+\end{longtable}
+
+% =====================
+\section{Sécurité et précautions}
+
+La personnalisation d'une ISO peut introduire des risques si elle est mal maîtrisée. Les précautions suivantes doivent être respectées :
+
+\begin{itemize}[label=--]
+    \item ne jamais intégrer de mots de passe personnels en clair dans l'image ;
+    \item éviter d'intégrer des clés privées SSH ;
+    \item maintenir les paquets à jour ;
+    \item vérifier les sources des paquets installés ;
+    \item documenter chaque modification ;
+    \item tester l'image avant déploiement ;
+    \item conserver l'ISO officielle originale comme base de secours.
+\end{itemize}
+
+Si l'ISO est destinée à être partagée, il faut s'assurer qu'elle ne contient aucune donnée personnelle, aucun identifiant et aucun fichier confidentiel.
+
+% =====================
+\section{Conclusion}
+
+La création d'ISO Ubuntu personnalisées avec CUBIC permet de préparer des systèmes adaptés à des usages précis tout en réduisant le temps de configuration après installation. À partir d'Ubuntu Server, il a été possible de produire plusieurs variantes : une ISO de développement, une ISO avec interface graphique et une ISO orientée machine learning.
+
+Ces images personnalisées facilitent le déploiement rapide d'environnements homogènes, que ce soit sur machines physiques, machines virtuelles ou plateformes de test. Le guide d'utilisation présenté dans ce document permet d'installer, tester et exploiter correctement les ISO créées, tout en respectant les bonnes pratiques de maintenance et de sécurité.
+
+% =====================
+\appendix
+\section{Annexe : modèle de fiche de suivi d'une ISO}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{>{\bfseries}p{5cm}p{9cm}}
+\toprule
+Nom de l'ISO & À compléter \\
+Version & À compléter \\
+ISO source & À compléter \\
+Date de création & À compléter \\
+Usage cible & Développement / Graphique / Machine learning \\
+Paquets ajoutés & À compléter \\
+Scripts ajoutés & À compléter \\
+Tests effectués & À compléter \\
+Problèmes connus & À compléter \\
+Responsable & À compléter \\
+\bottomrule
+\end{tabular}
+\caption{Fiche de suivi d'une ISO personnalisée}
+\end{table}
+
+\section{Annexe : commandes utiles}
+
+\subsection*{Vérifier les ressources système}
+
+\begin{lstlisting}
+free -h
+df -h
+lsblk
+lscpu
+\end{lstlisting}
+
+\subsection*{Vérifier le réseau}
+
+\begin{lstlisting}
+ip a
+ip route
+ping -c 4 8.8.8.8
+ping -c 4 google.com
+\end{lstlisting}
+
+\subsection*{Mettre à jour le système après installation}
+
+\begin{lstlisting}
+sudo apt update
+sudo apt upgrade -y
+\end{lstlisting}
+
+\subsection*{Vérifier les services}
+
+\begin{lstlisting}
+systemctl status ssh
+systemctl status NetworkManager
+systemctl status gdm3
+\end{lstlisting}
+
+\end{document}
