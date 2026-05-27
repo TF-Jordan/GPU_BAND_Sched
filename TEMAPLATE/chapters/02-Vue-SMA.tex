@@ -1,0 +1,613 @@
+% =============================================================================
+% CHAPITRE 2 — VUE MULTI-AGENTS DU SYSTÈME
+% =============================================================================
+\chapter{Vue multi-agents du système}
+\label{chap:sma}
+
+\section*{Introduction du chapitre}
+
+Le présent mémoire a été rédigé dans le cadre du cours de \emph{Systèmes Multi-Agents} (SMA) dispensé au Département de Génie Informatique de l'\acrshort{enspy}. À ce titre, la présentation strictement technique des chapitres adjacents (état de l'art au chapitre~\ref{chap:etat-art}, conception au chapitre~\ref{chap:conception}, implémentation au chapitre~\ref{chap:implementation}) doit être complétée par une \emph{lecture multi-agents} explicite du système. Cette lecture n'est pas un artifice rhétorique : le système \emph{omega-remote-paging} se prête naturellement à une description en termes d'agents coopérants car il est conçu, dès l'origine, comme un ensemble d'entités logicielles autonomes qui perçoivent leur environnement, agissent dessus et communiquent entre elles selon des protocoles formalisés.
+
+Ce chapitre poursuit trois objectifs. D'abord, rappeler les définitions et concepts fondamentaux de l'approche multi-agents que nous mobilisons (section~\ref{sec:sma-defs}). Ensuite, identifier et caractériser les agents qui constituent \emph{omega-remote-paging} (sections~\ref{sec:sma-recensement} à~\ref{sec:sma-sousagents}). Enfin, analyser leurs environnements, leurs interactions, leurs protocoles de communication, et discuter les propriétés émergentes du système ainsi formé (sections~\ref{sec:sma-env} à~\ref{sec:sma-emergence}).
+
+% -----------------------------------------------------------------------------
+\section{Définitions et concepts fondamentaux mobilisés}
+\label{sec:sma-defs}
+
+\subsection{Notion d'agent}
+
+L'\emph{agent} est l'entité élémentaire d'un système multi-agents. Bien qu'il n'existe pas de définition universellement admise, les deux définitions canoniques sont celle de Wooldridge~\cite{wooldridge_2002_sma} et celle de Ferber~\cite{ferber_1995_sma}.
+
+\begin{description}[leftmargin=*, style=nextline]
+    \item[Définition de Wooldridge.] Un agent est un système informatique \emph{situé} dans un \emph{environnement} qu'il \emph{perçoit} à travers des capteurs et sur lequel il \emph{agit} via des effecteurs, de manière \emph{autonome} pour satisfaire ses \emph{objectifs}.
+    \item[Définition de Ferber.] Un agent est une entité physique ou virtuelle capable d'agir dans un environnement, capable de communiquer avec d'autres agents, dotée de comportements tendant à satisfaire des objectifs, en disposant de ressources propres, capable de percevoir partiellement son environnement, ne disposant que d'une représentation partielle de cet environnement, possédant des compétences et offrant des services.
+\end{description}
+
+Wooldridge identifie quatre propriétés fondamentales que tout agent doit posséder, qu'il qualifie de \emph{notion faible d'agent} :
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Autonomie.} L'agent fonctionne sans intervention directe humaine ni d'autre entité, et contrôle son état interne et ses actions.
+    \item \textbf{Réactivité.} L'agent perçoit son environnement et y répond en temps utile.
+    \item \textbf{Pro-activité.} L'agent ne se contente pas de réagir : il initie des actions pour satisfaire ses objectifs.
+    \item \textbf{Capacité sociale.} L'agent interagit avec d'autres agents (humains ou logiciels) par des protocoles de communication.
+\end{enumerate}
+
+\subsection{Notion de système multi-agents}
+
+Un \emph{système multi-agents} (SMA) est, selon Ferber, un système composé d'un ensemble d'agents évoluant dans un environnement commun, dotés de mécanismes d'interaction qui leur permettent de coopérer, de communiquer et éventuellement de négocier pour résoudre collectivement un problème qu'aucun agent isolé ne pourrait résoudre seul. Quatre composants caractérisent un SMA :
+
+\begin{itemize}[leftmargin=*]
+    \item un \textbf{environnement} (espace partagé, structuré, où évoluent les agents) ;
+    \item un ensemble d'\textbf{agents} dotés de buts, ressources et compétences propres ;
+    \item un ensemble de \textbf{relations} entre agents (autorité, dépendance, voisinage, etc.) ;
+    \item un ensemble d'\textbf{opérations} permettant aux agents d'agir sur l'environnement et de communiquer entre eux.
+\end{itemize}
+
+\subsection{Architectures d'agent}
+
+La littérature SMA distingue traditionnellement trois grandes familles architecturales :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Architecture réactive.} L'agent est un système stimulus-réponse pur, sans représentation symbolique du monde. Modèle de référence : les \emph{subsumption architectures} de Brooks. Coût computationnel faible, comportement rapide et robuste, mais incapacité à raisonner sur des objectifs distants.
+    \item \textbf{Architecture cognitive (ou délibérative).} L'agent maintient une représentation symbolique de son environnement, raisonne sur des croyances et des plans pour atteindre ses buts. Modèle de référence : l'architecture BDI (\emph{Belief--Desire--Intention}). Capacité de planification élevée, mais surcoût computationnel et latence de réponse plus importante.
+    \item \textbf{Architecture hybride.} L'agent combine une couche réactive (réflexes rapides face aux stimuli immédiats) et une couche cognitive (planification à plus long terme). Modèle de référence : l'architecture \emph{TouringMachines} de Ferguson. C'est l'architecture la plus utilisée en pratique pour les systèmes réels.
+\end{itemize}
+
+\subsection{Caractérisation de l'environnement}
+
+L'environnement d'un SMA se caractérise selon plusieurs dimensions classiques (Russell \& Norvig) :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Accessible / inaccessible} : l'agent peut-il observer la totalité de l'état pertinent ?
+    \item \textbf{Déterministe / non-déterministe} : la même action dans le même état produit-elle toujours le même résultat ?
+    \item \textbf{Statique / dynamique} : l'environnement change-t-il indépendamment des actions de l'agent ?
+    \item \textbf{Discret / continu} : les états et actions sont-ils dénombrables ou continus ?
+    \item \textbf{Épisodique / séquentiel} : chaque décision dépend-elle uniquement de l'état courant ou aussi de l'historique ?
+\end{itemize}
+
+\subsection{Communication inter-agents}
+
+La communication est ce qui transforme un ensemble d'agents en un \emph{système} multi-agents. La norme la plus établie est l'\emph{Agent Communication Language} de FIPA~\cite{fipa_spec_2002} qui structure un message en deux niveaux : (i) une \emph{enveloppe} contenant l'expéditeur, le destinataire, l'identifiant de conversation, le langage et l'ontologie utilisés ; (ii) un \emph{contenu} structuré autour d'un acte de langage (\emph{performative}) : \texttt{inform}, \texttt{request}, \texttt{query-if}, \texttt{propose}, \texttt{accept-proposal}, \texttt{refuse}, \texttt{cancel}, etc. Cette typologie hérite de la théorie des actes de langage de Searle.
+
+\subsection{Coordination, coopération, négociation}
+
+Trois patterns d'interaction structurent l'organisation des SMA :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Coordination} : alignement des actions des agents pour éviter les conflits sur des ressources partagées (verrous, élection de leader, ordonnancement).
+    \item \textbf{Coopération} : poursuite d'un but commun par la mise en commun de capacités et de ressources.
+    \item \textbf{Négociation} : résolution d'un désaccord ou d'une concurrence par échange d'offres et de contre-offres (\emph{Contract Net Protocol}, enchères).
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\section{Recensement des agents dans \emph{omega-remote-paging}}
+\label{sec:sma-recensement}
+
+L'examen du dépôt \texttt{Omega\_FusionCore\_Proxmox-main/} permet d'identifier six types d'agents distincts, dont quatre principaux et deux familles de sous-agents internes. Le tableau~\ref{tab:agents-recensement} les recense.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{2.6cm}p{2.2cm}p{3.0cm}p{5cm}}
+\toprule
+\textbf{Nom} & \textbf{Architecture} & \textbf{Cardinalité} & \textbf{Rôle principal} \\
+\midrule
+\texttt{omega-controller} & Cognitive (BDI-like) & 1 par cluster        & Vue globale, décisions de placement et migration \\
+\texttt{omega-daemon}     & Hybride              & 1 par nœud           & Compute + store, applique les décisions, intercepte les défauts de page \\
+\texttt{node-a-agent}     & Hybride léger        & 1 par nœud (variante) & Agent autonome standalone sans contrôleur \\
+\texttt{node-bc-store}    & Réactive             & 1 par nœud (variante) & Service de stockage des pages distantes \\
+Sous-agents internes      & Réactive             & 9 par démon          & Schedulers vCPU/I/O/GPU, multiplexeurs, trackers \\
+\texttt{omega-uffd-bridge}& Réactive             & 1 par VM             & Pont userfaultfd injecté dans QEMU \\
+\bottomrule
+\end{tabular}
+\caption{Recensement des agents de \emph{omega-remote-paging}.}
+\label{tab:agents-recensement}
+\end{table}
+
+\subsection{Justification de la lecture multi-agents}
+
+Pourquoi parler d'\emph{agents} et non simplement de \emph{processus} ou de \emph{services} ? Les quatre critères de Wooldridge sont satisfaits par les composants ci-dessus :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Autonomie} : chaque démon décide localement de ses évictions, de ses hotplugs vCPU, de ses arbitrages I/O ; le contrôleur décide de ses migrations sans demander d'autorisation externe. Aucune action n'est commandée par un opérateur humain à chaque cycle.
+    \item \textbf{Réactivité} : le démon réagit en moins de 5~ms à un défaut de page (via \texttt{userfaultfd}) ; il réagit en moins d'une seconde à un changement de pression mémoire ; le \emph{circuit-breaker} du contrôleur réagit à la disparition d'un pair.
+    \item \textbf{Pro-activité} : le démon n'attend pas une commande pour évincer des pages froides ; il \emph{anticipe} la saturation via la boucle adaptative \texttt{AdaptiveInterval}. Le contrôleur anticipe la saturation cluster en migrant avant d'atteindre les seuils critiques.
+    \item \textbf{Capacité sociale} : les démons communiquent entre eux via un protocole binaire formalisé (20~octets, 12~opcodes, sémantique précise) ; ils communiquent avec le contrôleur via une API HTTP REST documentée.
+\end{itemize}
+
+Ces quatre critères, vérifiés simultanément, qualifient sans ambiguïté chacun des composants comme agent au sens de la \emph{notion faible} de Wooldridge.
+
+% -----------------------------------------------------------------------------
+\section{Le contrôleur cluster : agent cognitif}
+\label{sec:sma-controller}
+
+\subsection{Caractérisation BDI}
+
+Le \texttt{omega-controller} est l'unique agent cognitif du système. Il en présente toutes les caractéristiques d'une architecture \emph{Belief--Desire--Intention} (BDI) :
+
+\begin{description}[leftmargin=*, style=nextline]
+    \item[Beliefs (croyances).] Le contrôleur maintient une représentation symbolique du cluster sous forme d'une instance \texttt{ClusterState} agrégeant les retours de \texttt{/control/status} de chaque nœud. Cette représentation est explicitement \emph{datée} (chaque champ porte un \texttt{collected\_at} et peut être marqué \texttt{stale=True}). Les croyances comprennent : RAM libre par nœud, slots vCPU libres, VRAM libre, latences inter-nœuds, migrations actives, charge CPU par nœud, pression PSI par nœud.
+    \item[Desires (désirs).] Les désirs du contrôleur sont consignés sous forme de seuils et d'invariants : \texttt{ram\_high\_pct} ne doit pas dépasser 85\%, \texttt{ram\_critical\_pct} ne doit pas dépasser 95\%, le quota par VM doit toujours être respecté, aucune VM~GPU ne doit se retrouver sur un nœud sans VRAM suffisante (veto absolu).
+    \item[Intentions (intentions).] Lorsque les croyances entrent en contradiction avec les désirs, le contrôleur forme une intention concrète : une \texttt{MigrationCandidate} ou un \texttt{VcpuPoolDecision}. Cette intention est ensuite exécutée par envoi d'une commande HTTP à l'agent responsable.
+\end{description}
+
+\subsection{Boucle de raisonnement}
+
+L'algorithme~\ref{algo:bdi-controller} formalise la boucle de raisonnement du contrôleur sur un cycle, en respectant le canevas BDI classique \emph{percevoir $\to$ réviser les croyances $\to$ délibérer $\to$ exécuter}.
+
+\begin{algorithm}[H]
+\caption{Boucle BDI du \texttt{omega-controller}}
+\label{algo:bdi-controller}
+\KwData{Ensemble des nœuds $\mathcal{N}$ ; croyances $B$ ; désirs $D$ (invariants et seuils) ; intentions $I$}
+\While{le contrôleur est actif}{
+   \tcp{Phase 1 : perception}
+   \ForEach{$n \in \mathcal{N}$}{
+      $r_n \gets$ \texttt{ResilientCollector.collect}($n$) \tcp*{cf. algo.~\ref{algo:collector}}
+   }
+   \tcp{Phase 2 : révision des croyances}
+   $B \gets$ agréger $\{r_n\}_{n \in \mathcal{N}}$\;
+   \ForEach{$v$ VM connue}{
+       calculer $\text{avg\_cpu}(v)$, $\text{throttle\_ratio}(v)$, $\text{remote\_pages}(v)$\;
+   }
+   \tcp{Phase 3 : délibération}
+   $I \gets \emptyset$\;
+   \ForEach{$v$ VM}{
+       \If{$B$ viole un désir pour $v$ (RAM > 85\%, ou idle > 60s + RAM > 85\%, ou throttle > 30\%)}{
+           $n^* \gets \arg\max_{n \in \mathcal{N}} S(n)$ avec veto GPU \tcp*{eq.~\ref{eq:score}}
+           ajouter \texttt{MigrationCandidate}($v$, $n_{\text{src}}$, $n^*$, type) à $I$\;
+       }
+   }
+   \tcp{Phase 4 : exécution}
+   \ForEach{$i \in I$}{
+       envoyer \texttt{POST /control/migrate} au démon source\;
+       journaliser \texttt{intention\_dispatched}($i$)\;
+   }
+   attendre \texttt{interval} secondes\;
+}
+\end{algorithm}
+
+Cette boucle est implémentée par \texttt{controller.main monitor --interval N} : la sous-commande \texttt{monitor} est la matérialisation concrète du cycle BDI. La sous-commande \texttt{policy --dry-run} permet en outre d'exécuter \emph{seulement} les phases 1, 2 et 3, sans la phase 4 (exécution) : c'est l'équivalent d'un mode \og{}réflexion sans action\fg{} utile pour la mise au point.
+
+% -----------------------------------------------------------------------------
+\section{Le démon de nœud : agent hybride}
+\label{sec:sma-daemon}
+
+Le \texttt{omega-daemon} déployé symétriquement sur chaque nœud est l'archétype de l'agent hybride. Il combine deux couches superposées : une couche réactive rapide pour les événements à très basse latence (défauts de page, lectures de pression), et une couche cognitive plus lente pour les décisions structurantes (migration, hotplug).
+
+\subsection{Couche réactive : le chemin chaud}
+
+La couche réactive est sollicitée à chaque défaut de page. Son temps de réponse est contraint par la sémantique \texttt{userfaultfd} : tant que le démon n'a pas répondu par \texttt{UFFDIO\_COPY}, le fil \emph{guest} reste bloqué. Cette couche est donc strictement stimulus-réponse, sans délibération, et a été soigneusement écrite pour éviter toute allocation mémoire dans le chemin chaud. Les éléments qui la composent sont :
+
+\begin{itemize}[leftmargin=*]
+    \item le \emph{handler} \texttt{userfaultfd} qui lit les \texttt{uffd\_msg} et délègue à un consommateur Tokio ;
+    \item le \texttt{FaultBus} (canal mpsc) qui transmet les événements à la couche cognitive sans bloquer ;
+    \item le \texttt{StoreServer} qui répond aux \texttt{PUT\_PAGE} / \texttt{GET\_PAGE} entrants des pairs.
+\end{itemize}
+
+\subsection{Couche cognitive : le \texttt{policy\_engine}}
+
+La couche cognitive est portée par le module \texttt{policy\_engine.rs}. Elle consomme les événements agrégés du \texttt{FaultBus}, les compteurs cgroup, les lectures PSI, et délibère pour produire des actions structurantes :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Hotplug vCPU} si \texttt{cpu.usage} dépasse 80\% pendant suffisamment longtemps ;
+    \item \textbf{Downscale vCPU} si \texttt{cpu.usage} reste sous 35\% pendant 60~secondes consécutives ;
+    \item \textbf{Boost} ou \textbf{rétrogradation} de \texttt{cpu.weight} si une VM \emph{donor} et une VM \emph{borrower} coexistent localement ;
+    \item \textbf{Notification au contrôleur} via \texttt{/control/status} pour signaler une saturation persistante.
+\end{itemize}
+
+\subsection{Rôle dual : compute + store}
+
+Une particularité originale de notre démon est son \emph{rôle dual} : il joue simultanément le rôle d'agent \emph{compute} (héberge et surveille des VMs locales) et d'agent \emph{store} (reçoit et stocke les pages distantes des VMs des pairs). Du point de vue SMA, ceci correspond à une situation où chaque agent dispose de deux \emph{rôles} qu'il joue alternativement selon le contexte d'interaction. Cette dualité simplifie le déploiement (un seul binaire à pousser) et élimine la distinction nœud-frontal/nœud-arrière qui exigerait deux ontologies différentes.
+
+% -----------------------------------------------------------------------------
+\section{Agents réactifs et standalone}
+\label{sec:sma-reactive}
+
+\subsection{Le store (\texttt{node-bc-store}) : agent réactif pur}
+
+Le \texttt{node-bc-store} est un agent purement réactif : il ne possède aucun état délibératif, aucun but à long terme, aucune capacité d'initiative. Son \og{}cerveau\fg{} se réduit à une table de hachage shardée (\texttt{DashMap}) et à un dispatcher d'opcodes. Sa boucle de vie est triviale :
+
+\begin{enumerate}[leftmargin=*]
+    \item attendre une connexion TCP sur le port 9100 ;
+    \item lire l'en-tête de 20~octets ;
+    \item dispatcher selon l'opcode : \texttt{PUT\_PAGE}, \texttt{GET\_PAGE}, \texttt{DELETE\_PAGE}, \texttt{BATCH\_PUT\_PAGE}, \texttt{STATS\_REQUEST}, \texttt{PING} ;
+    \item répondre, journaliser un compteur, recommencer.
+\end{enumerate}
+
+Cette simplicité est un \emph{choix} : un agent réactif pur est plus prévisible, plus testable et plus performant qu'un agent cognitif quand son rôle ne demande pas de raisonnement. Le \texttt{node-bc-store} illustre le principe \og{}\emph{intelligence where it matters, simplicity elsewhere}\fg{}.
+
+Un seul comportement pro-actif est implanté : l'\texttt{OrphanCleaner}, qui toutes les cinq minutes interroge \texttt{pvesh get /cluster/resources --type vm} pour identifier les VMs disparues du cluster, attend dix minutes de grâce, puis supprime leurs pages. Cette boucle d'arrière-plan suffit à donner au store une trace de pro-activité, mais ne modifie pas son caractère essentiellement réactif.
+
+\subsection{L'agent VM (\texttt{node-a-agent}) : variante autonome}
+
+Le \texttt{node-a-agent} est la variante \emph{standalone} de notre architecture, conçue pour les lab KVM ou les déploiements mono-nœud où le contrôleur centralisé est superflu. Il combine en un seul binaire les compétences habituellement séparées entre le démon (compute) et un agent local minimal :
+
+\begin{itemize}[leftmargin=*]
+    \item interception \texttt{userfaultfd} sur les mappings de la VM ;
+    \item éviction CLOCK locale ;
+    \item réplication vers un ou plusieurs stores distants ;
+    \item scheduler vCPU élastique avec hotplug QMP ;
+    \item balloon \emph{thin-provisioning} piloté par taux de défauts ;
+    \item migration agent (détecte sa propre saturation et déclenche une migration vers un pair plus libre).
+\end{itemize}
+
+Sa migration agent est particulièrement intéressante du point de vue SMA : c'est un agent qui décide \emph{de sa propre migration}, sans contrôleur externe, en se fondant sur un critère relatif (\og{}le nœud cible doit avoir strictement plus de RAM libre \emph{ou} strictement plus de vCPU libres que le mien, et n'a pas de veto GPU\fg{}). Cette autonomie locale rappelle les \emph{agents mobiles} de la première génération SMA (Aglets, D'Agents), à la différence que l'agent ne se déplace pas lui-même : il transporte une \emph{VM} dont il est responsable.
+
+\subsection{Le \emph{bridge} \texttt{userfaultfd} : agent réactif éphémère}
+
+Le \texttt{omega-uffd-bridge.so} mérite une mention particulière. Chargé via \texttt{LD\_PRELOAD} dans chaque processus QEMU, il agit pendant quelques millisecondes au démarrage de la VM (détection du mapping \texttt{memfd}, ouverture du \texttt{userfaultfd}, transmission du fd à l'agent via \texttt{SCM\_RIGHTS}), puis s'éteint. C'est un \emph{agent éphémère}, dont la durée de vie utile est inférieure à la seconde et dont la seule perception est le contenu de \texttt{/proc/self/maps}. Sa simplicité illustre une autre maxime SMA : la fonction est plus importante que la durée de vie.
+
+% -----------------------------------------------------------------------------
+\section{Les sous-agents internes au démon}
+\label{sec:sma-sousagents}
+
+À l'intérieur même du \texttt{omega-daemon}, plusieurs modules présentent les caractéristiques d'agents : ils disposent d'un état propre, d'une boucle d'exécution autonome, de canaux de communication asynchrones (\emph{mpsc} Tokio) et de buts spécifiques. Ce sont les \emph{sous-agents} ou \emph{agents internes} du démon. Le tableau~\ref{tab:sous-agents} les détaille.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3.5cm}p{4.5cm}p{5cm}}
+\toprule
+\textbf{Sous-agent} & \textbf{But} & \textbf{Périodicité / déclencheur} \\
+\midrule
+\texttt{EvictionEngine}      & Maintenir \texttt{usage\_pct} $<$ 75\%       & Boucle 2--10\,s (adaptative) \\
+\texttt{VcpuScheduler}       & Adapter vCPU au profil de charge             & Boucle 1\,s \\
+\texttt{DiskIoScheduler}     & Arbitrer \texttt{io.weight} entre VMs        & Boucle 1\,s \\
+\texttt{GpuMultiplexer}      & Sérialiser les accès GPU avec budgets VRAM   & Worker dédié, file de priorité \\
+\texttt{VmTracker}           & Maintenir l'inventaire des VMs locales       & Boucle 5\,s + événements Proxmox \\
+\texttt{BalloonManager}      & Thin-provisioning RAM piloté par fault rate  & Boucle 2\,s \\
+\texttt{OrphanCleaner}       & Supprimer les pages des VMs disparues        & Boucle 300\,s \\
+\texttt{FaultBus}            & Collecter les statistiques de défauts        & Streaming continu \\
+\texttt{MigrationExecutor}   & Exécuter \texttt{qm migrate} et nettoyer      & À la demande \\
+\bottomrule
+\end{tabular}
+\caption{Sous-agents internes au \texttt{omega-daemon}.}
+\label{tab:sous-agents}
+\end{table}
+
+Ces sous-agents partagent un \emph{environnement commun} via la structure \texttt{Arc<NodeState>} (\og{}État partagé du nœud\fg{}) : c'est une mémoire commune, protégée par des verrous fins (\texttt{RwLock}, \texttt{DashMap}), accessible en lecture par tous les sous-agents et modifiable par celui qui en est responsable. Cette organisation correspond à ce que la littérature SMA nomme un \emph{tableau noir} (\emph{blackboard architecture}) : un espace mémoire commun où chaque agent dépose ses observations et lit celles des autres, sans communication point à point.
+
+% -----------------------------------------------------------------------------
+\section{Environnement des agents}
+\label{sec:sma-env}
+
+\subsection{Caractérisation selon les dimensions classiques}
+
+L'environnement dans lequel évoluent nos agents est :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Partiellement accessible.} Chaque démon perçoit complètement son nœud (RAM, cgroups, sysfs, sockets QMP) mais ne voit ses pairs qu'à travers les API HTTP \texttt{/status}. Le contrôleur a une vue cluster-wide mais elle est nécessairement décalée temporellement (cache 120~s, circuit-breaker).
+    \item \textbf{Non-déterministe.} Une éviction de page n'a pas toujours le même effet (RAM libérée variable selon ce que le noyau décide de \emph{reclaim}). Une migration live peut ne pas converger sur une charge avec \emph{dirty rate} élevé.
+    \item \textbf{Dynamique.} Les charges de travail \emph{guest} évoluent constamment : démarrage de processus, allocation mémoire, calculs intensifs, idle périodique. L'environnement change sans intervention des agents.
+    \item \textbf{Discret pour les événements, continu pour les mesures.} Les défauts de page sont des événements discrets ; les charges CPU et la pression PSI sont des mesures continues échantillonnées à intervalles réguliers.
+    \item \textbf{Séquentiel.} Une décision de migration dépend de l'historique : une VM récemment migrée bénéficie d'un \emph{cooldown} (constante \texttt{GPU\_MIGRATION\_COOLDOWN\_SECS = 120}, \texttt{ADMISSION\_MIGRATION\_COOLDOWN\_SECS = 60}, \texttt{DRAIN\_MIGRATION\_COOLDOWN\_SECS = 30}). L'historique conditionne donc les actions présentes.
+\end{itemize}
+
+Cette caractérisation est cohérente avec celle des environnements \emph{ouverts} et \emph{multi-acteurs} où la SMA prend tout son sens : les approches monolithiques (script centralisé, monothread) s'y révèlent rapidement inadaptées car elles ne savent pas absorber l'imprédictibilité.
+
+\subsection{Sources de perception}
+
+Les agents perçoivent leur environnement à travers les sources suivantes :
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Source} & \textbf{Format} & \textbf{Agent consommateur} \\
+\midrule
+\texttt{/proc/meminfo}            & Texte clé/valeur     & EvictionEngine, contrôleur \\
+\texttt{/proc/pressure/\{cpu,memory,io\}} & Texte (PSI)  & policy\_engine, contrôleur \\
+\texttt{/proc/stat}               & Texte               & VcpuScheduler (steal time) \\
+\texttt{/sys/fs/cgroup/.../\{cpu,io\}.\{stat,pressure\}} & Texte & schedulers locaux \\
+\texttt{/etc/pve/qemu-server/*.conf} & INI              & VmTracker \\
+\texttt{/var/run/qemu-server/\{vmid\}.\{pid,qmp\}} & PID / socket & VmTracker, hotplug QMP \\
+\texttt{/dev/dri/renderD*}        & ioctl DRM          & GpuMultiplexer \\
+\texttt{userfaultfd}              & \texttt{uffd\_msg} & handler uffd $\to$ FaultBus \\
+Socket TCP/TLS port 9100          & Trame binaire 20\,o + payload & StoreServer \\
+HTTP \texttt{/control/status} sur pairs & JSON          & contrôleur (via ResilientCollector) \\
+\bottomrule
+\end{tabular}
+\caption{Sources perceptuelles des agents.}
+\label{tab:perceptions}
+\end{table}
+
+\subsection{Effecteurs}
+
+Les actions exécutées par les agents sur leur environnement sont les suivantes :
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lp{4cm}p{4.5cm}}
+\toprule
+\textbf{Effecteur} & \textbf{Effet} & \textbf{Agent} \\
+\midrule
+\texttt{madvise(MADV\_DONTNEED)}         & Libère RAM physique         & EvictionEngine \\
+\texttt{UFFDIO\_COPY}                    & Injecte une page dans le guest & handler uffd \\
+Écriture \texttt{cpu.weight}             & Pondère l'ordonnanceur CPU  & VcpuScheduler \\
+Écriture \texttt{io.weight}              & Pondère la file I/O bloc    & DiskIoScheduler \\
+QMP \texttt{device\_add cpu}             & Hotplug d'un vCPU           & VcpuScheduler \\
+QMP \texttt{balloon <mib>}               & Gonfle/dégonfle le ballon   & BalloonManager \\
+\texttt{qm migrate <vmid> <target>}      & Migration live ou cold      & MigrationExecutor \\
+\texttt{ioctl VFIO\_DEVICE\_RESET}       & Reset matériel du GPU       & GpuMultiplexer (leader) \\
+\texttt{flock} sur lockfile              & Acquérir un rôle de leader  & GpuMultiplexer \\
+PUT\_PAGE / DELETE\_PAGE                 & Modifier l'état d'un pair   & EvictionEngine, cleanup \\
+\bottomrule
+\end{tabular}
+\caption{Effecteurs disponibles aux agents.}
+\label{tab:effecteurs}
+\end{table}
+
+% -----------------------------------------------------------------------------
+\section{Interactions et protocoles de communication}
+\label{sec:sma-interactions}
+
+\subsection{Topologie d'interaction}
+
+La figure~\ref{fig:sma-topology} représente la topologie d'interaction entre les agents. Trois types de liens coexistent : (i) une \emph{communication hiérarchique} verticale entre le contrôleur et les démons (lien dashed, rouge) ; (ii) une \emph{communication pair-à-pair} horizontale entre démons (lien plein, bleu) ; (iii) une \emph{communication intra-agent} entre sous-agents d'un même démon (lien pointillé, gris, à travers le tableau noir \texttt{NodeState}).
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    ctrl/.style={draw, ellipse, fill=green!15, minimum width=3.5cm, minimum height=1cm, align=center, font=\small\bfseries},
+    daemon/.style={draw, rectangle, rounded corners, fill=orange!15, minimum width=3.6cm, minimum height=2.4cm, align=center, font=\small\bfseries},
+    subagent/.style={draw, rectangle, fill=white, minimum width=1.3cm, minimum height=0.45cm, font=\tiny, inner sep=2pt},
+    >=Stealth
+]
+% Contrôleur en haut
+\node[ctrl] (c) at (0, 3.5) {omega-controller \\ \scriptsize (BDI cognitif)};
+
+% Trois démons en bas
+\node[daemon] (d1) at (-5.0, -0.5) {omega-daemon A \\[2pt] (hybride)};
+\node[daemon] (d2) at ( 0.0, -0.5) {omega-daemon B \\[2pt] (hybride)};
+\node[daemon] (d3) at ( 5.0, -0.5) {omega-daemon C \\[2pt] (hybride)};
+
+% Sous-agents dans chaque démon
+\foreach \x in {-5.0, 0.0, 5.0} {
+    \node[subagent] at (\x-1.0, -1.1) {Eviction};
+    \node[subagent] at (\x+0.4, -1.1) {Store};
+    \node[subagent] at (\x-1.0, -1.6) {vCPU};
+    \node[subagent] at (\x+0.4, -1.6) {GPU};
+}
+
+% Liens contrôleur ↔ démons (rouge dashed)
+\draw[<->, dashed, red!70, thick] (c) -- node[midway, sloped, above, font=\scriptsize] {HTTP REST} (d1.north);
+\draw[<->, dashed, red!70, thick] (c) -- (d2.north);
+\draw[<->, dashed, red!70, thick] (c) -- node[midway, sloped, above, font=\scriptsize] {HTTP REST} (d3.north);
+
+% Liens démons ↔ démons (bleu pleins)
+\draw[<->, blue!70, thick] (d1) -- node[midway, above, font=\scriptsize] {TLS :9100 (binaire)} (d2);
+\draw[<->, blue!70, thick] (d2) -- node[midway, above, font=\scriptsize] {TLS :9100} (d3);
+\draw[<->, blue!70, thick] (d1.south) ..controls (-2.5, -2.8) and (2.5, -2.8) .. (d3.south);
+
+% Légende
+\node[anchor=west, font=\scriptsize] at (-7, -3.6) {\textcolor{red!70}{\textbf{- - -}} hiérarchique (controller $\to$ démons)};
+\node[anchor=west, font=\scriptsize] at (-7, -4.0) {\textcolor{blue!70}{\textbf{---}} pair-à-pair (démons $\leftrightarrow$ démons, pages)};
+\node[anchor=west, font=\scriptsize] at (-7, -4.4) {\textit{intra-agent : via \texttt{NodeState} (tableau noir)}};
+\end{tikzpicture}
+\caption{Topologie d'interaction multi-agents de \emph{omega-remote-paging}.}
+\label{fig:sma-topology}
+\end{figure}
+
+\subsection{Protocoles de communication}
+
+Le système emploie quatre protocoles de communication distincts, chacun adapté à un type d'interaction. Le tableau~\ref{tab:protocoles-sma} les compare.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3cm}p{2.8cm}p{3.2cm}p{4cm}}
+\toprule
+\textbf{Protocole} & \textbf{Acteurs} & \textbf{Caractéristiques} & \textbf{Usage} \\
+\midrule
+Binaire 20 o + TLS    & démon $\leftrightarrow$ démon     & Synchrone, faible latence ($\sim$ ms) & Transport de pages, statistiques \\
+HTTP REST + JSON      & contrôleur $\leftrightarrow$ démon & Asynchrone, plus verbeux             & État, migration, admission, métriques \\
+Tokio \texttt{mpsc}   & sous-agents intra-démon            & Asynchrone, en mémoire               & FaultBus, signaux de pression \\
+Unix \texttt{SCM\_RIGHTS} & bridge $\to$ agent             & Transfert de file descriptor          & Passage du \texttt{userfaultfd} \\
+\bottomrule
+\end{tabular}
+\caption{Comparatif des protocoles de communication.}
+\label{tab:protocoles-sma}
+\end{table}
+
+\subsection{Comparaison avec FIPA ACL}
+
+L'approche normative de référence pour la communication inter-agents est l'\emph{Agent Communication Language} de FIPA~\cite{fipa_spec_2002}. Nous ne l'employons pas, et le choix mérite justification. Le tableau~\ref{tab:fipa-vs-omega} compare les deux approches.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{4cm}p{4.5cm}p{4.5cm}}
+\toprule
+\textbf{Critère} & \textbf{FIPA ACL} & \textbf{Notre protocole binaire} \\
+\midrule
+Sémantique         & 22 performatives (request, inform, propose, etc.)   & 12 opcodes (PUT, GET, DELETE, STATS, etc.) \\
+Transport          & TCP plain + textuel (XML/S-expression)              & TCP+TLS 1.3, binaire compact 20 o \\
+Latence cible      & Quelques dizaines de ms (négociation)                & $< 5$ ms (chemin chaud uffd) \\
+Ontologie          & Explicite, négociée par message                      & Implicite, statique \\
+Réversibilité      & Forte (chaque message renvoie à un acte de langage)  & Faible (PUT/GET = primitives système) \\
+Surcoût en-tête    & Plusieurs centaines d'octets par message             & 20 octets fixes \\
+\bottomrule
+\end{tabular}
+\caption{Comparaison FIPA ACL vs notre protocole binaire.}
+\label{tab:fipa-vs-omega}
+\end{table}
+
+Notre choix s'explique par la contrainte de latence : tant qu'un défaut de page n'est pas résolu, le fil \emph{guest} est bloqué dans le noyau. Un en-tête FIPA de plusieurs centaines d'octets en XML, à parser puis à interpréter sémantiquement, est incompatible avec un budget de quelques millisecondes. La sémantique implicite de notre protocole (\og{}PUT\_PAGE = \texttt{request} de l'acte \emph{stocker}\fg{}) est suffisante car les agents partagent une \emph{ontologie close} : il n'y a pas de négociation à mener entre eux sur le sens d'un \texttt{PUT\_PAGE}, sa signification est figée par la spécification du protocole.
+
+\textbf{Correspondance néanmoins établie} : chacun de nos opcodes peut être projeté sur une performative FIPA, comme le montre le tableau~\ref{tab:opcodes-fipa}.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Opcode} & \textbf{Performative FIPA} & \textbf{Justification} \\
+\midrule
+\texttt{PUT\_PAGE}     & \texttt{request} (action : stocker) & Demande exécutoire \\
+\texttt{GET\_PAGE}     & \texttt{query-ref} (référence : page)  & Question à laquelle on attend un contenu \\
+\texttt{DELETE\_PAGE}  & \texttt{request} (action : supprimer) & Demande exécutoire \\
+\texttt{STATS\_REQUEST} & \texttt{query-ref} (réf. : statistiques) & Question \\
+\texttt{OK}            & \texttt{inform-done}                & Confirmation d'exécution \\
+\texttt{NOT\_FOUND}    & \texttt{failure} / \texttt{inform}  & Échec sémantique \\
+\texttt{ERROR}         & \texttt{failure}                    & Échec opérationnel \\
+\texttt{PING/PONG}     & \texttt{query-if / inform}          & Test de présence \\
+\bottomrule
+\end{tabular}
+\caption{Projection des opcodes binaires sur les performatives FIPA.}
+\label{tab:opcodes-fipa}
+\end{table}
+
+Cette correspondance n'est pas qu'un exercice théorique : elle ouvre la possibilité, à terme, d'un \emph{pont} entre notre système et un environnement SMA conforme FIPA (par exemple, l'orchestration ORION/Parallax si ses agents Ray étaient instrumentés en JADE).
+
+% -----------------------------------------------------------------------------
+\section{Patterns de coopération et de coordination}
+\label{sec:sma-patterns}
+
+\subsection{Coordination par leader-election (\texttt{flock})}
+
+Le partage d'un même \acrshort{gpu} entre plusieurs VMs d'un même nœud est un problème classique de coordination : plusieurs sous-agents \texttt{GpuMultiplexer} pourraient tenter simultanément de reseter le matériel ou de soumettre une \emph{command stream}, ce qui mènerait à un état incohérent. La solution implantée est une \emph{leader-election} légère par \texttt{flock(2)} sur le fichier \texttt{/run/omega-gpu-scheduler-<pci>.lock}. L'algorithme~\ref{algo:leader-election} le formalise.
+
+\begin{algorithm}[H]
+\caption{Leader-election par \texttt{flock} (\texttt{GpuMultiplexer})}
+\label{algo:leader-election}
+\KwData{Chemin du lockfile $L$ ; intervalle de retry $\tau = 5$\,s}
+ouvrir $L$ en lecture/écriture (créer si absent)\;
+\Try{\texttt{flock}($L$, \texttt{LOCK\_EX} | \texttt{LOCK\_NB})}{
+   \tcp{leader acquis : prendre la responsabilité du GPU}
+   $\text{role} \gets \textsc{Leader}$\;
+   démarrer la boucle de scheduling round-robin\;
+}
+\Catch{EWOULDBLOCK}{
+   \tcp{déjà pris : devenir suiveur passif}
+   $\text{role} \gets \textsc{Follower}$\;
+   \While{$\text{role} = \textsc{Follower}$}{
+      attendre $\tau$ secondes\;
+      \Try{\texttt{flock}($L$, \texttt{LOCK\_EX} | \texttt{LOCK\_NB})}{
+         $\text{role} \gets \textsc{Leader}$ \tcp*{takeover en cas de mort du leader}
+      }
+   }
+}
+\end{algorithm}
+
+Ce protocole est analogue à une élection \emph{Bully} simplifiée : le premier qui prend le verrou gagne, et son éventuelle disparition (mort du processus) libère automatiquement le verrou pour qu'un autre prenne le relais (sémantique \texttt{flock} du noyau Linux).
+
+\subsection{Coopération \emph{donor / borrower} sur les vCPU}
+
+Lorsqu'une VM \emph{borrower} demande plus de cycles CPU et qu'une VM \emph{donor} idle existe sur le même nœud, le \texttt{VcpuScheduler} ajuste les poids cgroup : le donor passe à \texttt{cpu.weight = 50}, le borrower à \texttt{cpu.weight = 200}. Ce n'est pas un transfert direct de vCPU entre VMs, mais un rééquilibrage des quotas d'arbitrage du noyau. Du point de vue SMA, c'est un cas de \emph{coopération non-altruiste} : la VM \emph{donor} ne consent pas explicitement (elle est arbitrée par le démon), mais son sacrifice est temporaire et borné (constante \texttt{DONOR\_SAFE\_STEAL\_PCT = 5\%} qui protège son socle minimal).
+
+\subsection{Coopération par réplication pour la tolérance aux pannes}
+
+Lorsque le facteur de réplication \texttt{OMEGA\_REPLICATION\_FACTOR} est supérieur à 1, chaque page est envoyée à $R$ stores distincts. C'est une coopération à but \emph{disponibilité} : plusieurs agents stores se partagent la responsabilité de conserver une page, ce qui permet à un agent compute de continuer à servir un défaut de page même si l'un des stores est devenu injoignable. Du point de vue SMA, c'est un exemple de \emph{redondance par diversité} (ici, par localisation) classique en tolérance aux pannes distribuée.
+
+\subsection{Coopération hiérarchique contrôleur $\to$ démons}
+
+Le contrôleur ne prend aucune décision \emph{à la place} d'un démon : il \emph{recommande} via \texttt{POST /control/migrate}, et c'est le démon qui exécute. Cette répartition correspond à ce que Ferber~\cite{ferber_1995_sma} qualifie de \emph{coopération hiérarchique souple} : il existe une autorité (le contrôleur), mais elle ne court-circuite pas l'autonomie des subordonnés. Si un démon est injoignable au moment de la commande, la commande échoue silencieusement, le démon retrouve son autonomie complète, et la prochaine itération du contrôleur prendra acte de la nouvelle situation.
+
+\subsection{Coopération par tableau noir intra-démon}
+
+Les sous-agents internes (\texttt{EvictionEngine}, \texttt{VcpuScheduler}, etc.) ne communiquent pas par messages mais par lecture-écriture concurrente sur le \texttt{NodeState} partagé. Ce pattern, dit \emph{tableau noir} (\emph{blackboard}), est classique en SMA et présente l'avantage d'éviter le couplage point-à-point : un nouvel agent peut être ajouté qui se contente de lire des informations du \texttt{NodeState} sans qu'il soit nécessaire de modifier les agents producteurs.
+
+% -----------------------------------------------------------------------------
+\section{Vérification des propriétés multi-agents}
+\label{sec:sma-proprietes}
+
+Le tableau~\ref{tab:sma-properties} récapitule la vérification des propriétés fondamentales de Wooldridge pour chacun de nos agents principaux. Les cases vides indiquent que la propriété n'est pas atteinte (légitimement, pour un agent purement réactif par exemple).
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3.3cm}cccc}
+\toprule
+\textbf{Agent} & \textbf{Autonomie} & \textbf{Réactivité} & \textbf{Pro-activité} & \textbf{Socialité} \\
+\midrule
+\texttt{omega-controller}     & \checkmark        & \checkmark        & \checkmark   & \checkmark \\
+\texttt{omega-daemon}         & \checkmark        & \checkmark        & \checkmark   & \checkmark \\
+\texttt{node-a-agent}         & \checkmark        & \checkmark        & \checkmark   & \checkmark \\
+\texttt{node-bc-store}        & \checkmark        & \checkmark        & (OrphanCleaner) & \checkmark \\
+\texttt{omega-uffd-bridge}    & \checkmark        & \checkmark        &              & \checkmark (passe le fd) \\
+Sous-agents internes          & \checkmark        & \checkmark        & \checkmark (boucle propre) & via tableau noir \\
+\bottomrule
+\end{tabular}
+\caption{Vérification des propriétés de Wooldridge pour chaque agent.}
+\label{tab:sma-properties}
+\end{table}
+
+Cette grille confirme que le système constitue bien un SMA au sens de la \emph{notion faible} d'agent : tous les composants satisfont les quatre propriétés (à l'exception légitime des agents purement réactifs pour la pro-activité, qui par définition n'en disposent pas, mais pour lesquels même le \texttt{node-bc-store} affiche une trace de pro-activité avec son \texttt{OrphanCleaner}).
+
+% -----------------------------------------------------------------------------
+\section{Propriétés émergentes du système}
+\label{sec:sma-emergence}
+
+Une caractéristique souvent revendiquée des SMA est l'\emph{émergence} : le système global manifeste des comportements qui ne sont programmés explicitement dans aucun agent individuel, mais qui résultent de leurs interactions. \emph{Omega-remote-paging} en présente plusieurs.
+
+\subsection{Auto-équilibrage cluster-wide}
+
+Aucun agent n'est responsable de \og{}l'équilibre du cluster\fg{} comme objectif explicite. Pourtant, le système tend de lui-même vers un équilibre : chaque démon évince localement quand il est sous pression, le contrôleur migre quand un nœud reste durablement chargé, le score $S(n)$ tend à diriger les charges vers les nœuds les plus libres. La convergence vers un équilibre est une propriété émergente des règles locales.
+
+\subsection{Tolérance partielle aux pannes du contrôleur}
+
+Si le contrôleur tombe en panne, les démons continuent de fonctionner : ils servent leurs défauts de page, évincent localement, appliquent leurs schedulers internes. Seules les décisions cluster-wide (admission de nouvelles VMs, migrations correctives) sont suspendues. Cette \emph{dégradation gracieuse} n'est jamais commandée par un agent : elle résulte du fait que chaque démon est conçu autonome.
+
+\subsection{Auto-stabilisation par boucle adaptative}
+
+Le moteur d'éviction adapte son intervalle de scrutation (de 10\,s à 2\,s) en fonction du taux de défauts distants signalé par le \texttt{FaultBus}. Cette boucle de rétroaction négative tend à amener le système vers un point fixe : quand la pression augmente, l'agressivité d'éviction augmente, ce qui finit par soulager la pression, ce qui réduit l'agressivité. Aucun agent ne planifie explicitement cette convergence ; elle émerge de l'interaction du moteur, du bus et de la nature physique du paging.
+
+\subsection{Équilibrage statistique du store}
+
+La répartition \texttt{hash(vm\_id, page\_id) \% N} produit une distribution équilibrée des pages entre les $N$ stores, sans qu'aucun agent ne tienne explicitement \og{}le compte\fg{} du déséquilibre. C'est l'archétype d'une coordination implicite par hachage déterministe, omniprésente dans les SMA distribués modernes (CRUSH de Ceph, Rendezvous Hashing).
+
+% -----------------------------------------------------------------------------
+\section{Diagramme synthétique et conclusion}
+\label{sec:sma-synthese}
+
+La figure~\ref{fig:sma-synthese} synthétise la vue multi-agents du système : les agents principaux, leurs sous-agents internes, leurs perceptions, leurs effecteurs et les canaux de communication entre eux.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    env/.style={draw, rectangle, fill=gray!10, minimum width=14cm, minimum height=1.2cm, align=center, font=\small},
+    agent/.style={draw, rectangle, rounded corners, fill=orange!15, minimum width=4cm, minimum height=1.5cm, align=center, font=\small\bfseries},
+    ctrl/.style={draw, rectangle, rounded corners, fill=green!15, minimum width=4cm, minimum height=1.2cm, align=center, font=\small\bfseries},
+    arr/.style={->, thick, >=Stealth}
+]
+% Environnement
+\node[env] (env) at (0, -3.5) {\textbf{Environnement} : /proc/meminfo $\cdot$ cgroups v2 $\cdot$ PSI $\cdot$ QMP $\cdot$ /dev/dri $\cdot$ userfaultfd $\cdot$ /etc/pve $\cdot$ réseau};
+
+% Contrôleur en haut
+\node[ctrl] (c) at (0, 3.5) {Contrôleur (BDI cognitif) \\[2pt] \scriptsize{Beliefs / Desires / Intentions}};
+
+% Agents au milieu
+\node[agent] (a1) at (-5, 0.5) {omega-daemon \\[2pt] \scriptsize{(hybride : réactif + cognitif)}};
+\node[agent] (a2) at ( 0, 0.5) {omega-daemon};
+\node[agent] (a3) at ( 5, 0.5) {omega-daemon};
+
+% Liens contrôleur ↔ agents
+\draw[arr, red!70, dashed] (c) -- (a1.north);
+\draw[arr, red!70, dashed] (c) -- (a2.north);
+\draw[arr, red!70, dashed] (c) -- (a3.north);
+\node[font=\scriptsize, red!70] at (-2.5, 2.5) {HTTP REST};
+
+% Liens agents ↔ agents
+\draw[arr, blue!70, <->] (a1) -- node[above, font=\scriptsize] {TLS :9100} (a2);
+\draw[arr, blue!70, <->] (a2) -- (a3);
+
+% Liens agents ↔ environnement
+\draw[arr, gray!70] (a1.south) -- (env.north -| a1);
+\draw[arr, gray!70] (a2.south) -- (env.north -| a2);
+\draw[arr, gray!70] (a3.south) -- (env.north -| a3);
+\node[font=\scriptsize, gray!70] at (3.5, -1.7) {perceptions / actions};
+
+% Légende
+\node[anchor=west, font=\scriptsize] at (-7, -5) {\textcolor{red!70}{\textbf{-- --}} hiérarchique \quad \textcolor{blue!70}{\textbf{---}} pair-à-pair \quad \textcolor{gray!70}{\textbf{---}} perception/action};
+\end{tikzpicture}
+\caption{Synthèse de la vue multi-agents du système.}
+\label{fig:sma-synthese}
+\end{figure}
+
+\section*{Conclusion du chapitre}
+
+Ce chapitre a montré que \emph{omega-remote-paging} se laisse naturellement décrire comme un système multi-agents au sens classique de Wooldridge et de Ferber. Six types d'agents y coexistent --- un contrôleur cognitif unique, des démons hybrides symétriques, un agent réactif autonome (\texttt{node-a-agent}), un service réactif pur (\texttt{node-bc-store}), un pont éphémère (\texttt{omega-uffd-bridge}), et neuf sous-agents internes par démon coordonnés par un tableau noir. Les quatre propriétés fondamentales (autonomie, réactivité, pro-activité, socialité) ont été vérifiées pour chaque agent principal. Quatre protocoles de communication structurent leurs interactions : un protocole binaire de 20 octets sur TLS pour le chemin chaud, une API HTTP REST pour la coordination cognitive, des canaux \texttt{mpsc} Tokio pour les sous-agents, et le passage de \emph{file descriptor} via \texttt{SCM\_RIGHTS} pour l'intégration QEMU. Les patterns de coopération mis en œuvre (leader-election par \texttt{flock}, coopération \emph{donor/borrower} sur les vCPU, réplication pour la tolérance aux pannes, hiérarchie souple contrôleur-démons, tableau noir intra-démon) sont des patterns SMA classiques. Enfin, le système manifeste plusieurs propriétés émergentes (auto-équilibrage cluster-wide, tolérance partielle aux pannes du contrôleur, auto-stabilisation par boucle adaptative, équilibrage statistique du store par hachage déterministe) qui valident a posteriori la pertinence de l'approche multi-agents.
+
+Le chapitre suivant entre dans la conception technique détaillée du système, en s'appuyant sur les rôles, responsabilités et interactions d'agents posés ici.
