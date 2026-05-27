@@ -1,0 +1,43 @@
+[package]
+name        = "node-a-agent"
+version     = "0.1.0"
+edition     = "2021"
+description = "Agent de paging distant côté nœud A — userfaultfd + client store"
+authors     = ["omega-remote-paging contributors"]
+
+[[bin]]
+name = "node-a-agent"
+path = "src/main.rs"
+
+[dependencies]
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+clap               = { workspace = true }
+anyhow             = { workspace = true }
+thiserror          = { workspace = true }
+libc               = { workspace = true }
+bytes              = { workspace = true }
+dashmap            = { workspace = true }
+lz4_flex       = { workspace = true }
+futures        = { workspace = true }
+axum           = { workspace = true }
+tokio-util     = { workspace = true }
+num_cpus       = { workspace = true }
+
+# TLS — canal de paging chiffré (client)
+tokio-rustls   = { workspace = true }
+rustls         = { workspace = true }
+
+# Partagé avec node-bc-store pour le protocole réseau
+node-bc-store = { path = "../node-bc-store" }
+
+[dev-dependencies]
+tempfile  = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name    = "eviction_bench"
+harness = false

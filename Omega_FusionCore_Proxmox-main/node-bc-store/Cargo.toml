@@ -1,0 +1,43 @@
+[package]
+name        = "node-bc-store"
+version     = "0.1.0"
+edition     = "2021"
+description = "Remote memory page store — nœuds B et C du cluster omega-remote-paging"
+authors     = ["omega-remote-paging contributors"]
+
+[[bin]]
+name = "node-bc-store"
+path = "src/main.rs"
+
+[dependencies]
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+clap               = { workspace = true }
+anyhow             = { workspace = true }
+thiserror          = { workspace = true }
+libc               = { workspace = true }
+dashmap            = { workspace = true }
+bytes              = { workspace = true }
+sled               = { workspace = true }
+axum               = { workspace = true }
+tokio-util         = { workspace = true }
+
+lz4_flex       = { workspace = true }
+
+# TLS — canal de paging chiffré
+tokio-rustls   = { workspace = true }
+rustls         = { workspace = true }
+rustls-pemfile = { workspace = true }
+rcgen          = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile   = { workspace = true }
+criterion  = { workspace = true }
+
+[[bench]]
+name    = "store_bench"
+harness = false

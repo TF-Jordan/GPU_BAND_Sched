@@ -1,0 +1,28 @@
+[package]
+name        = "omega-gpu-proxy"
+version     = "0.1.0"
+edition     = "2021"
+description = "Proxy GPU applicatif Omega — file d'attente et budgets VM"
+authors     = ["omega-remote-paging contributors"]
+
+[[bin]]
+name = "omega-gpu-proxy"
+path = "src/main.rs"
+
+[dependencies]
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+clap               = { workspace = true }
+anyhow             = { workspace = true }
+thiserror          = { workspace = true }
+dashmap            = { workspace = true }
+axum               = { workspace = true }
+uuid               = { workspace = true }
+chrono             = { workspace = true }
+tower              = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"

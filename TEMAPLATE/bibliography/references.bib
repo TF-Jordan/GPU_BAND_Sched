@@ -1,0 +1,317 @@
+
+% ─── Références — Chapitre 3 : Analyse, Conception et Implémentation ──────────
+
+% ── Plateformes de virtualisation ─────────────────────────────────────────────
+
+@Misc{proxmox_doc,
+    author = {{Proxmox Server Solutions GmbH}},
+    title  = {Proxmox {VE} Administration Guide},
+    year   = {2024},
+    url    = {https://pve.proxmox.com/pve-docs/pve-admin-guide.html},
+    note   = {Documentation officielle Proxmox VE 8.x},
+}
+
+@Misc{qemu_doc,
+    author = {{QEMU Project}},
+    title  = {{QEMU} --- the {FAST!} processor emulator},
+    year   = {2024},
+    url    = {https://www.qemu.org/docs/master/},
+    note   = {Documentation technique QEMU, incluant QMP et les device virtio},
+}
+
+@Misc{qemu_balloon,
+    author = {{QEMU Project}},
+    title  = {Virtio Balloon --- {QEMU} Documentation},
+    year   = {2024},
+    url    = {https://www.qemu.org/docs/master/interop/virtio-balloon.html},
+    note   = {Spécification du device virtio-balloon pour l'ajustement dynamique de RAM},
+}
+
+@Misc{kvm_doc,
+    author = {{Linux KVM Project}},
+    title  = {{KVM} --- Kernel-based Virtual Machine},
+    year   = {2024},
+    url    = {https://linux-kvm.org/page/Main_Page},
+    note   = {Documentation KVM : architecture, interfaces de contrôle et hotplug},
+}
+
+% ── Interfaces noyau Linux ────────────────────────────────────────────────────
+
+@Misc{userfaultfd_man,
+    author = {{The Linux Kernel Documentation}},
+    title  = {userfaultfd(2) --- Create a file descriptor for handling page faults in user space},
+    year   = {2023},
+    url    = {https://man7.org/linux/man-pages/man2/userfaultfd.2.html},
+    note   = {Linux man-pages 6.x},
+}
+
+@Misc{cgroups_v2_doc,
+    author = {{The Linux Kernel Documentation}},
+    title  = {Control Group v2},
+    year   = {2024},
+    url    = {https://docs.kernel.org/admin-guide/cgroup-v2.html},
+    note   = {Documentation noyau Linux, cgroups v2 : cpu, io, memory controllers},
+}
+
+@Misc{psi_doc,
+    author = {{The Linux Kernel Documentation}},
+    title  = {Pressure Stall Information ({PSI})},
+    year   = {2024},
+    url    = {https://docs.kernel.org/accounting/psi.html},
+    note   = {Documentation noyau Linux, monitoring de pression CPU/mémoire/IO},
+}
+
+@Misc{madvise_man,
+    author = {{The Linux Kernel Documentation}},
+    title  = {madvise(2) --- give advice about use of memory},
+    year   = {2023},
+    url    = {https://man7.org/linux/man-pages/man2/madvise.2.html},
+    note   = {Linux man-pages 6.x --- \texttt{MADV\_DONTNEED} utilisé pour libérer les pages évincées},
+}
+
+% ── Langages et écosystème ────────────────────────────────────────────────────
+
+@Misc{rust_lang,
+    author = {{The Rust Project}},
+    title  = {The Rust Programming Language},
+    year   = {2024},
+    url    = {https://doc.rust-lang.org/book/},
+    note   = {Documentation officielle du langage Rust},
+}
+
+@Misc{tokio_doc,
+    author = {{Tokio Contributors}},
+    title  = {Tokio --- An asynchronous runtime for the {Rust} programming language},
+    year   = {2024},
+    url    = {https://tokio.rs/},
+    note   = {Runtime asynchrone utilisé pour la gestion des connexions TCP et des tâches concurrentes du daemon},
+}
+
+@Misc{dashmap_crate,
+    author = {Blaauw, Mads},
+    title  = {{DashMap} --- Blazingly fast concurrent {HashMap} in {Rust}},
+    year   = {2024},
+    url    = {https://crates.io/crates/dashmap},
+    note   = {Crate Rust utilisée pour l'index de pages sans verrou global (\texttt{PageStore})},
+}
+
+@Misc{rustls_crate,
+    author = {{rustls Contributors}},
+    title  = {rustls --- a modern {TLS} library in {Rust}},
+    year   = {2024},
+    url    = {https://github.com/rustls/rustls},
+    note   = {Bibliothèque TLS~1.3 utilisée pour le chiffrement du canal TCP inter-nœuds},
+}
+
+% ── Stockage distribué ────────────────────────────────────────────────────────
+
+@Misc{ceph_doc,
+    author = {{Ceph Foundation}},
+    title  = {Ceph Documentation},
+    year   = {2024},
+    url    = {https://docs.ceph.com/},
+    note   = {Documentation officielle Ceph, incluant RADOS Block Device (RBD) utilisé pour les disques VM},
+}
+
+% ── Observabilité ─────────────────────────────────────────────────────────────
+
+@Misc{prometheus_doc,
+    author = {{The Prometheus Authors}},
+    title  = {Prometheus --- Monitoring system \& time series database},
+    year   = {2024},
+    url    = {https://prometheus.io/docs/introduction/overview/},
+    note   = {Système de métriques utilisé pour l'exposition des indicateurs du daemon},
+}
+
+% ── Ouvrages de référence ──────────────────────────────────────────────────────
+
+@Book{tanenbaum_os,
+    author    = {Tanenbaum, Andrew S. and Bos, Herbert},
+    title     = {Modern Operating Systems},
+    edition   = {4},
+    publisher = {Pearson},
+    year      = {2015},
+    isbn      = {978-0-13-359162-0},
+}
+
+@Book{nygard_release,
+    author    = {Nygard, Michael T.},
+    title     = {Release It! Design and Deploy Production-Ready Software},
+    edition   = {2},
+    publisher = {Pragmatic Bookshelf},
+    year      = {2018},
+    isbn      = {978-1-68050-239-8},
+    note      = {Présente le pattern circuit-breaker utilisé dans le \texttt{ResilientCollector}},
+}
+
+@Book{kleppmann_ddia,
+    author    = {Kleppmann, Martin},
+    title     = {Designing Data-Intensive Applications},
+    publisher = {O'Reilly Media},
+    year      = {2017},
+    isbn      = {978-1-491-90374-0},
+    note      = {Référence pour les invariants de cohérence et la distribution des données dans les systèmes distribués},
+}
+
+% ── Articles et communications scientifiques ──────────────────────────────────
+
+@InProceedings{waldspurger_2002,
+    author    = {Waldspurger, Carl A.},
+    title     = {Memory Resource Management in {VMware ESX} Server},
+    booktitle = {Proceedings of the 5th USENIX Symposium on Operating Systems Design and Implementation (OSDI)},
+    year      = {2002},
+    pages     = {181--194},
+    note      = {Présente le balloon driver de VMware, précurseur du balloon virtio utilisé dans ce projet},
+}
+
+@InProceedings{clark_2005,
+    author    = {Clark, Christopher and Fraser, Keir and Hand, Steven and Hansen, Jacob Gorm and Jul, Eric and Limpach, Christian and Pratt, Ian and Warfield, Andrew},
+    title     = {Live Migration of Virtual Machines},
+    booktitle = {Proceedings of the 2nd USENIX Symposium on Networked Systems Design and Implementation (NSDI)},
+    year      = {2005},
+    pages     = {273--286},
+    note      = {Article fondateur sur la migration live par pré-copie (pre-copy) de la RAM des VMs},
+}
+
+@InProceedings{hines_2009,
+    author    = {Hines, Michael R. and Deshpande, Umesh and Gopalan, Kartik},
+    title     = {Post-Copy Live Migration of Virtual Machines},
+    booktitle = {ACM SIGOPS Operating Systems Review},
+    volume    = {43},
+    number    = {3},
+    year      = {2009},
+    pages     = {14--26},
+    note      = {Alternative post-copy à la migration live pré-copie utilisée par KVM/Proxmox},
+}
+
+@Misc{lz4_compression,
+    author = {Collet, Yann},
+    title  = {{LZ4} --- Extremely Fast Compression Algorithm},
+    year   = {2024},
+    url    = {https://lz4.github.io/lz4/},
+    note   = {Algorithme de compression utilisé optionnellement pour le transport de pages (flag bit~0)},
+}
+
+% ── Désagrégation mémoire et far memory ───────────────────────────────────────
+
+@InProceedings{gu_2017_infiniswap,
+    author    = {Gu, Juncheng and Lee, Youngmoon and Zhang, Yiwen and Chowdhury, Mosharaf and Shin, Kang G.},
+    title     = {Efficient Memory Disaggregation with {INFINISWAP}},
+    booktitle = {Proceedings of the 14th USENIX Symposium on Networked Systems Design and Implementation (NSDI~17)},
+    year      = {2017},
+    pages     = {649--667},
+    address   = {Boston, MA, USA},
+    note      = {Paging distant sur RDMA via un pilote bloc Linux ; comparaison directe pour la latence et le surcoût réseau},
+}
+
+@InProceedings{shan_2018_legoos,
+    author    = {Shan, Yizhou and Huang, Yutong and Chen, Yilun and Zhang, Yiying},
+    title     = {{LegoOS}: A Disseminated, Distributed {OS} for Hardware Resource Disaggregation},
+    booktitle = {Proceedings of the 13th USENIX Symposium on Operating Systems Design and Implementation (OSDI~18)},
+    year      = {2018},
+    pages     = {69--87},
+    address   = {Carlsbad, CA, USA},
+    note      = {OS distribué pour la désagrégation matérielle ; oppose un modèle « OS-natif » au modèle « espace utilisateur » de ce travail},
+}
+
+@InProceedings{zhou_2022_carbink,
+    author    = {Zhou, Yang and Wassel, Hassan M. G. and Liu, Sihang and Gao, Jiaqi and Mickens, James and Yu, Minlan and Kennelly, Chris and Turner, Paul and Culler, David E. and Levy, Henry M. and Vahdat, Amin},
+    title     = {Carbink: Fault-Tolerant Far Memory},
+    booktitle = {Proceedings of the 16th USENIX Symposium on Operating Systems Design and Implementation (OSDI~22)},
+    year      = {2022},
+    pages     = {291--305},
+    address   = {Carlsbad, CA, USA},
+    note      = {Far memory tolérante aux pannes via codage à effacement ; éclaire la stratégie de réplication d'omega-remote-paging},
+}
+
+@InProceedings{aguilera_2017_remote_memory,
+    author    = {Aguilera, Marcos K. and Amit, Nadav and Calciu, Irina and Deguillard, Xavier and Gandhi, Jayneel and Subrahmanyam, Pratap and Suresh, Lalith and Tati, Kiran and Venkatasubramanian, Rajesh and Wei, Michael},
+    title     = {Remote Memory in the Age of Fast Networks},
+    booktitle = {Proceedings of the 2017 Symposium on Cloud Computing (SoCC~17)},
+    year      = {2017},
+    pages     = {121--127},
+    address   = {Santa Clara, CA, USA},
+    note      = {Étude fondatrice de la viabilité du paging distant sur réseaux haute performance},
+}
+
+@InProceedings{li_2023_pond,
+    author    = {Li, Huaicheng and Berger, Daniel S. and Hsu, Lisa and Ernst, Daniel and Zardoshti, Pantea and Novakovic, Stanko and Shah, Monish and Rajadnya, Samir and Lee, Scott and Agarwal, Ishwar and Hill, Mark D. and Fontoura, Marcus and Bianchini, Ricardo},
+    title     = {Pond: {CXL}-Based Memory Pooling Systems for Cloud Platforms},
+    booktitle = {Proceedings of the 28th ACM International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS~23)},
+    year      = {2023},
+    pages     = {574--587},
+    note      = {Mutualisation mémoire matérielle via CXL ; direction matérielle complémentaire à l'approche logicielle de ce travail},
+}
+
+% ── Ordonnancement multi-critères et gestion de ressources cluster ────────────
+
+@Article{gulati_2012_drs,
+    author  = {Gulati, Ajay and Holler, Anne and Ji, Minwen and Shanmuganathan, Ganesha and Waldspurger, Carl A. and Zhu, Xiaoyun},
+    title   = {{VMware} Distributed Resource Management: Design, Implementation, and Lessons Learned},
+    journal = {VMware Technical Journal},
+    volume  = {1},
+    number  = {1},
+    year    = {2012},
+    pages   = {45--64},
+    note    = {Ordonnanceur multi-critères propriétaire dont les principes d'admission inspirent la \texttt{MigrationPolicy}},
+}
+
+@InProceedings{verma_2015_borg,
+    author    = {Verma, Abhishek and Pedrosa, Luis and Korupolu, Madhukar R. and Oppenheimer, David and Tune, Eric and Wilkes, John},
+    title     = {Large-scale cluster management at {Google} with {Borg}},
+    booktitle = {Proceedings of the 10th European Conference on Computer Systems (EuroSys~15)},
+    year      = {2015},
+    pages     = {18:1--18:17},
+    address   = {Bordeaux, France},
+    note      = {Orchestrateur de cluster à grande échelle ; modèle de référence pour les politiques d'admission distribuées},
+}
+
+% ── Algorithmes de remplacement de pages ──────────────────────────────────────
+
+@InProceedings{jiang_2005_clockpro,
+    author    = {Jiang, Song and Chen, Feng and Zhang, Xiaodong},
+    title     = {{CLOCK-Pro}: An Effective Improvement of the {CLOCK} Replacement},
+    booktitle = {Proceedings of the 2005 USENIX Annual Technical Conference},
+    year      = {2005},
+    pages     = {323--336},
+    address   = {Anaheim, CA, USA},
+    note      = {Variante de CLOCK avec distinction des pages chaudes/froides ; évolution possible pour l'\texttt{EvictionEngine}},
+}
+
+% ── Migration de processus en espace utilisateur ──────────────────────────────
+
+@Misc{criu_doc,
+    author = {{CRIU Project}},
+    title  = {{CRIU} --- Checkpoint/Restore In Userspace},
+    year   = {2024},
+    url    = {https://criu.org/},
+    note   = {Mécanisme alternatif de migration en espace utilisateur ; incompatible avec QEMU live},
+}
+
+% ── Systèmes Multi-Agents (SMA) ──────────────────────────────────────────────
+
+@Book{wooldridge_2002_sma,
+    author    = {Wooldridge, Michael},
+    title     = {An Introduction to MultiAgent Systems},
+    publisher = {John Wiley \& Sons},
+    year      = {2002},
+    isbn      = {978-0470519462},
+    note      = {Manuel de référence posant les définitions et propriétés fondamentales des agents (Autonomie, Réactivité, etc.).},
+}
+
+@Book{ferber_1995_sma,
+    author    = {Ferber, Jacques},
+    title     = {Les systèmes multi-agents, Vers une intelligence collective},
+    publisher = {InterEditions},
+    year      = {1995},
+    isbn      = {978-2729606654},
+    note      = {Ouvrage théorique francophone de référence sur les interactions, les communications conceptuelles et les architectures SMA.},
+}
+
+@Misc{fipa_spec_2002,
+    author = {{FIPA (Foundation for Intelligent Physical Agents)}},
+    title  = {FIPA ACL Message Structure Specification},
+    year   = {2002},
+    url    = {http://www.fipa.org/specs/fipa00061/},
+    note   = {Norme standard caractérisant les enveloppes sémantiques et actes de langage pour la communication inter-agents.},
+}
