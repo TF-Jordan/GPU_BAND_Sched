@@ -1,0 +1,102 @@
+% =============================================================================
+\chapter{Généralités et État de l'Art}
+\label{ch:etat-art}
+% =============================================================================
+
+L'optimisation des infrastructures de centres de données s'appuie traditionnellement sur la virtualisation pour consolider des charges de travail hétérogènes sur des ressources matérielles partagées. Toutefois, cette mutualisation se heurte physiquement au cloisonnement des serveurs au sein d'un cluster : si l'hyperviseur parvient à segmenter les ressources d'un même nœud, il n'efface pas les frontières entre nœuds distincts. Ce chapitre dresse le panorama technologique et scientifique dans lequel s'insère FusionCore, en analysant les fondements de la virtualisation KVM/Proxmox, les avancées en désagrégation mémoire et les principes de l'intelligence distribuée. Il se conclut par un positionnement critique de notre système face aux travaux de référence.
+
+% =============================================================================
+\section{Fondamentaux de la virtualisation et limites de Proxmox~VE}
+\label{sec:fondamentaux-virtualisation}
+% =============================================================================
+
+\subsection{Architecture de la virtualisation KVM/QEMU}
+
+La virtualisation moderne repose sur des hyperviseurs capables de fournir une abstraction complète du matériel à des systèmes d'exploitation invités. Sous Linux, l'architecture prédominante combine le module KVM (Kernel-based Virtual Machine)~\cite{kvm_doc}, qui transforme le noyau en hyperviseur de Type~1, et QEMU~\cite{qemu_doc}, chargé de l'émulation des périphériques. Ce binôme exploite la para-virtualisation via le standard \texttt{virtio} pour optimiser l'accès aux ressources réseau et bloc. Dans ce modèle, chaque machine virtuelle est perçue par le noyau hôte comme un processus standard, bénéficiant de tous les mécanismes d'ordonnancement disponibles.
+
+Proxmox~VE~\cite{proxmox_doc} s'établit comme une couche de gestion orchestrant ces instances au sein d'un cluster. Il intègre la migration à chaud héritée des travaux fondateurs de Clark et al.~\cite{clark_2005} sur la pré-copie (\textit{pre-copy}) de la mémoire des VMs.
+
+\subsection{Limites du modèle d'allocation statique}
+
+Malgré ces capacités, l'allocation des ressources dans Proxmox~VE demeure intrinsèquement statique. À l'instanciation, une VM reçoit un quota fixe de RAM et de vCPU déduit exclusivement de la capacité locale de son nœud hôte. Cette rigidité conduit à trois problèmes structurels bien identifiés :
+
+\begin{itemize}
+    \item \textbf{Fragmentation inter-nœuds.} Un nœud saturé peut être incapable d'accueillir une VM, alors que la capacité agrégée disponible sur les autres nœuds du cluster serait suffisante.
+    \item \textbf{Sur-provisionnement à froid.} Une fraction non négligeable de la RAM allouée à une VM reste inactive, immobilisant des ressources sans apport utile.
+    \item \textbf{Exclusivité des accélérateurs.} L'attribution d'un GPU via PCI Passthrough est exclusive : un seul invité peut en bénéficier à la fois, même lorsque le taux d'utilisation de l'accélérateur est faible.
+\end{itemize}
+
+Ces inefficacités ont motivé un large corpus de recherches sur la désagrégation des ressources, présenté dans la section suivante.
+
+% =============================================================================
+\section{Désagrégation et mutualisation des ressources}
+\label{sec:desagregation-memoire}
+% =============================================================================
+
+La désagrégation des ressources consiste à découpler les composants d'un serveur monolithique — processeur, mémoire, stockage, accélérateurs — pour les exposer sous forme de pools partagés accessibles en réseau. Deux grandes familles d'approches coexistent : les solutions logicielles, qui opèrent sur des réseaux Ethernet standards, et les solutions matérielles, qui s'appuient sur des interconnexions spécialisées.
+
+\subsection{Désagrégation mémoire logicielle sur réseau}
+
+Les travaux pionniers d'Aguilera et al.~\cite{aguilera_2017_remote_memory} ont démontré la viabilité du paging distant sur des réseaux Ethernet haute performance, ouvrant la voie à plusieurs systèmes de référence.
+
+\textbf{INFINISWAP}~\cite{gu_2017_infiniswap} expose la mémoire distante d'un cluster comme un dispositif de swap Linux, accédé via RDMA (\textit{Remote Direct Memory Access}). Cette architecture atteint des latences de rappel de l'ordre de 4~µs, mais suppose la présence de cartes réseau spécialisées (InfiniBand ou RoCE), absentes de la plupart des déploiements académiques ou de petite entreprise.
+
+\textbf{LegoOS}~\cite{shan_2018_legoos} pousse la logique à l'extrême en proposant un système d'exploitation distribué (\textit{splitkernel}) où chaque composant matériel — CPU, RAM, stockage — est géré par un monitor distinct sur le réseau. Cette approche maximise la flexibilité conceptuelle mais exige une refonte complète de la pile logicielle et reste incompatible avec QEMU/KVM tel que déployé dans Proxmox.
+
+\textbf{Carbink}~\cite{zhou_2022_carbink} raffine la mémoire distante en y intégrant une tolérance aux pannes par codage à effacement (Reed-Solomon). Développé pour les infrastructures internes de Google, il cible également des réseaux RDMA et ne prend pas en compte la coordination des autres ressources (vCPU, GPU, I/O).
+
+\subsection{Désagrégation mémoire matérielle}
+
+\textbf{Pond}~\cite{li_2023_pond} explore la mutualisation mémoire via le standard CXL (\textit{Compute Express Link}), qui permet d'attacher de la mémoire à un nœud via une interface PCIe spécialisée, avec des latences proches de la DRAM locale. Bien que prometteuse, cette voie reste dépendante du déploiement de cartes mères et de modules CXL encore peu répandus dans les infrastructures existantes.
+
+\subsection{Ordonnancement multi-ressources dans les clusters}
+
+\textbf{VMware DRS}~\cite{gulati_2012_drs} constitue l'exemple canonique d'un ordonnanceur cluster multi-critères en environnement de virtualisation propriétaire : il décide dynamiquement du placement et de la migration des VMs en fonction de la charge CPU et mémoire des nœuds. Cependant, il opère uniquement dans l'écosystème vSphere et ne prend pas en compte la mémoire distante comme primitive d'admission.
+
+\textbf{Borg}~\cite{verma_2015_borg} fournit le modèle de référence d'un orchestrateur de cluster à grande échelle sous Linux. Ses principes de placement et d'admission ont influencé la conception de la \texttt{MigrationPolicy} de FusionCore.
+
+% =============================================================================
+\section{Paradigme des Systèmes Multi-Agents (SMA)}
+\label{sec:fondamentaux-sma}
+% =============================================================================
+
+L'arbitrage de ressources dynamiques à l'échelle d'un cluster ne peut se satisfaire d'une orchestration purement centralisée, qui constituerait un point de défaillance unique et un goulot d'étranglement décisionnel. Les architectures modernes de cloud tendent vers des modèles d'intelligence distribuée où la décision est portée par des entités autonomes.
+
+Ce paradigme est le cœur de la théorie des Systèmes Multi-Agents (SMA), dans laquelle des agents, évoluant dans un environnement partagé, manifestent des propriétés d'autonomie, de réactivité et de proactivité~\cite{wooldridge_2002_sma,ferber_1995_sma}. Un agent efficace perçoit son environnement local et agit pour poursuivre ses objectifs propres sans intervention extérieure constante. Dans le contexte d'un cluster, cela se traduit par la capacité d'un nœud à réguler ses propres tensions de charge tout en collaborant avec ses pairs via des protocoles sociaux formalisés, tels que ceux édictés par la FIPA~\cite{fipa_spec_2002}. C'est ce formalisme que FusionCore adopte pour modéliser le comportement de ses démons locaux et de son contrôleur global — une analyse développée en détail au chapitre~\ref{ch:sma}.
+
+% =============================================================================
+\section{Positionnement de FusionCore face à l'état de l'art}
+\label{sec:positionnement}
+% =============================================================================
+
+L'analyse des systèmes précédents révèle trois limitations communes qui les rendent inapplicables aux clusters Proxmox de production de taille académique ou de petite entreprise :
+
+\begin{enumerate}[label=(\roman*)]
+    \item ils requièrent du matériel spécialisé (RDMA, CXL) ou une licence propriétaire (vSphere) ;
+    \item ils supposent des modifications du noyau Linux ou un remplacement complet de la pile logicielle, incompatibles avec un environnement de production versionné ;
+    \item ils se concentrent sur une seule ressource (la mémoire) et ne coordonnent pas l'arbitrage des autres ressources (vCPU, GPU, I/O disque) à l'échelle du cluster.
+\end{enumerate}
+
+FusionCore répond simultanément à ces trois limitations. Le tableau~\ref{tab:positionnement-etat-art-intro} synthétise ce positionnement selon cinq critères discriminants.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Positionnement de FusionCore par rapport aux principaux systèmes de désagrégation.}
+    \label{tab:positionnement-etat-art-intro}
+    \footnotesize
+    \begin{tabular}{p{0.18\linewidth} c c c c c}
+        \toprule
+        \textbf{Système} & \textbf{Noyau modifié} & \textbf{Matériel spécialisé} & \textbf{Multi-ressource} & \textbf{Cible} & \textbf{Année} \\
+        \midrule
+        INFINISWAP~\cite{gu_2017_infiniswap}  & non      & RDMA & RAM seule        & swap Linux       & 2017 \\
+        LegoOS~\cite{shan_2018_legoos}        & OS dédié & RDMA & oui              & nouvelle pile    & 2018 \\
+        Carbink~\cite{zhou_2022_carbink}      & non      & RDMA & RAM seule        & Google interne   & 2022 \\
+        Pond~\cite{li_2023_pond}              & non      & CXL  & RAM seule        & cloud Azure      & 2023 \\
+        VMware DRS~\cite{gulati_2012_drs}     & ---      & non  & oui (sans RAM distante) & vSphere  & 2012 \\
+        \midrule
+        \textbf{FusionCore} & \textbf{non} & \textbf{non} & \textbf{oui (RAM, vCPU, GPU, I/O)} & \textbf{Proxmox~VE} & \textbf{2026} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+À notre connaissance, FusionCore est le premier système de mutualisation multi-ressources ciblant explicitement Proxmox~VE en espace utilisateur pur, combinant paging distant, ordonnancement élastique des vCPU, multiplexage GPU et arbitrage I/O dans une politique cluster cohérente, sans aucune exigence de matériel spécialisé. Cette position est cohérente avec le cas d'usage cible — mutualisation de ressources dans un cluster d'entreprise ou universitaire de taille moyenne — et complémentaire des approches matérielles émergentes (CXL, Pond) qui pourront, à terme, augmenter les performances atteignables sans remettre en cause l'architecture logicielle décrite dans ce rapport.

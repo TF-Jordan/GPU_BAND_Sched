@@ -1,0 +1,136 @@
+% =============================================================================
+\chapter{Analyse sous l'angle des Systèmes Multi-Agents (SMA)}
+\label{ch:sma}
+% =============================================================================
+
+Le projet FusionCore ne se limite pas à une optimisation d'infrastructure logicielle : il constitue une application concrète des paradigmes de l'Intelligence Artificielle Distribuée. En s'appuyant sur les travaux fondateurs de Wooldridge~\cite{wooldridge_2002_sma} et Ferber~\cite{ferber_1995_sma}, l'architecture de mutualisation des ressources peut être modélisée et analysée comme une société d'agents autonomes interagissant dans un environnement hautement dynamique. Ce chapitre présente l'analyse formelle de FusionCore selon le prisme des Systèmes Multi-Agents, en caractérisant l'environnement, les classes d'agents, leurs propriétés comportementales, leurs interactions et les mécanismes assurant la résilience globale du cluster.
+
+% =============================================================================
+\section{Modélisation de l'environnement}
+\label{sec:sma-environnement}
+% =============================================================================
+
+La définition d'un SMA repose sur la dyade \emph{agent -- environnement}. Dans FusionCore, l'environnement est constitué par le cluster Proxmox~VE considéré dans son ensemble : l'espace de calcul comprenant les nœuds physiques, les machines virtuelles en cours d'exécution et les ressources partagées (RAM, vCPU, GPU, liens réseau inter-nœuds).
+
+Cet environnement présente les caractéristiques suivantes, classiquement utilisées pour caractériser les environnements multi-agents~\cite{wooldridge_2002_sma} :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Caractérisation de l'environnement du SMA FusionCore.}
+    \label{tab:sma-environnement}
+    \begin{tabular}{p{0.26\linewidth} p{0.28\linewidth} p{0.36\linewidth}}
+        \toprule
+        \textbf{Propriété} & \textbf{Valeur} & \textbf{Justification} \\
+        \midrule
+        Accessibilité & Partiellement observable & Chaque agent ne perçoit que l'état de son nœud local ; la vue globale est reconstituée par le contrôleur avec un TTL de 120\,s. \\
+        Déterminisme & Non déterministe & Les charges de travail des VMs sont imprévisibles ; les défauts de page arrivent de manière asynchrone. \\
+        Dynamicité & Dynamique & L'état du cluster évolue en continu, indépendamment des décisions des agents. \\
+        Continuité & Discret (événements) & Les décisions d'admission et de migration sont prises sur des événements discrets (seuils, défauts, timeouts). \\
+        Multiplicité & Multi-agents & Plusieurs démons s'exécutent simultanément sur des nœuds distincts. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+La partielle observabilité est une contrainte fondamentale : aucun agent ne possède une connaissance instantanée et exhaustive de l'état de la mémoire globale du cluster. Cette limitation impose un processus constant de perception, de mise à jour des croyances (\textit{Beliefs}) et de communication entre agents, dont les protocoles sont décrits à la section~\ref{sec:sma-interactions}.
+
+% =============================================================================
+\section{Classification et modélisation des agents}
+\label{sec:sma-entites}
+% =============================================================================
+
+Au sein de cet environnement, FusionCore distingue deux classes d'agents aux architectures divergentes mais complémentaires.
+
+% -----------------------------------------------------------------------------
+\subsection{Les agents réactifs locaux : \texttt{omega-daemon}}
+\label{subsec:sma-daemon}
+% -----------------------------------------------------------------------------
+
+Chaque nœud physique du cluster héberge une instance du démon \texttt{omega-daemon}, qui constitue un \textbf{agent réactif local}. Son architecture est caractérisée par une boucle stimulus-réponse opérant en temps quasi-réel :
+
+\begin{itemize}
+    \item \textbf{Perception.} L'agent perçoit son environnement immédiat via les interfaces noyau : utilisation RAM via \texttt{/proc/meminfo}, pression CPU via les compteurs cgroup~v2 à 1\,ms de granularité, pression I/O via PSI (\texttt{/proc/pressure/io}), et défauts de page asynchrones via \texttt{userfaultfd}.
+    \item \textbf{Décision locale.} Sans attendre d'instruction du contrôleur central, l'agent décide de manière autonome d'évincer des pages froides (algorithme CLOCK), d'ajuster les poids CPU (\texttt{cpu.weight}) ou de gonfler le balloon virtio d'une VM surallouée.
+    \item \textbf{Action.} L'agent exécute les primitives correspondantes : \texttt{PUT\_PAGE} via le protocole TCP/TLS vers un nœud store, \texttt{device\_add}/\texttt{device\_del} via QMP pour le hotplug de vCPU, ou \texttt{madvise(MADV\_DONTNEED)} pour libérer la RAM locale.
+\end{itemize}
+
+Ce profil correspond à l'architecture \textbf{réactive} décrite par Wooldridge~\cite{wooldridge_2002_sma}, où la décision est entièrement déterminée par la perception courante, sans raisonnement symbolique sur des états futurs. Ce choix est délibéré : la célérité de la réponse locale (sub-seconde) prime sur la sophistication décisionnelle dans le cas des défauts de page.
+
+L'agent est en outre \textbf{proactif} : il n'attend pas d'être en situation de saturation pour agir. L'éviction CLOCK s'enclenche dès que l'usage RAM dépasse 75\,\%, et le monitoring CPU s'exécute en continu à 1\,ms de granularité, anticipant les dégradations avant qu'elles ne soient perceptibles par les VMs.
+
+\paragraph{Autonomie.} Chaque \texttt{omega-daemon} prend ses décisions d'éviction et d'ordonnancement local de manière souveraine, sans nécessiter la disponibilité du contrôleur central. Cette autonomie garantit que la couche de mutualisation ne devient pas un point de défaillance unique : même en cas de panne du contrôleur Python, les démons locaux continuent d'assurer le paging distant et le respect des quotas.
+
+% -----------------------------------------------------------------------------
+\subsection{L'agent coordinateur cognitif : \texttt{omega-controller}}
+\label{subsec:sma-controller}
+% -----------------------------------------------------------------------------
+
+L'agent contrôleur (\texttt{omega-controller}) adopte une posture architecturale plus \textbf{cognitive et délibérative}. Il est en charge des décisions à l'échelle du cluster, qui requièrent une vue agrégée de l'état global :
+
+\begin{itemize}
+    \item \textbf{Croyances (\textit{Beliefs}).} Le contrôleur maintient un modèle du monde constitué par les états collectés périodiquement auprès de chaque démon via \texttt{GET /api/status}. Ces données sont horodatées et peuvent être marquées \texttt{stale} si un nœud est temporairement inaccessible, reflétant l'incertitude inhérente à l'observabilité partielle.
+    \item \textbf{Désirs (\textit{Desires}).} L'objectif permanent du contrôleur est de maintenir l'homéostasie du cluster : équilibre de la charge RAM, vCPU, GPU et I/O entre les nœuds, dans le respect des invariants de quota formels.
+    \item \textbf{Intentions (\textit{Intentions}).} Lorsque l'analyse de l'état global révèle un déséquilibre persistant — qu'aucune action locale d'un démon ne peut résoudre —, le contrôleur forme l'intention d'une migration et émet les instructions correspondantes.
+\end{itemize}
+
+Cette structuration en termes de Croyances, Désirs et Intentions correspond au modèle \textbf{BDI} (\textit{Belief-Desire-Intention})~\cite{wooldridge_2002_sma}, utilisé pour décrire les agents délibératifs dont les décisions s'inscrivent dans un horizon temporel plus long que celui des agents réactifs.
+
+% =============================================================================
+\section{Propriétés comportementales des agents}
+\label{sec:sma-proprietes}
+% =============================================================================
+
+L'évaluation de FusionCore selon les propriétés définissant les agents intelligents~\cite{wooldridge_2002_sma} révèle une conformité rigoureuse à l'ensemble du spectre :
+
+\begin{table}[htbp]
+    \centering
+    \caption{Conformité des agents FusionCore aux propriétés des agents intelligents.}
+    \label{tab:sma-proprietes}
+    \begin{tabular}{p{0.18\linewidth} p{0.36\linewidth} p{0.36\linewidth}}
+        \toprule
+        \textbf{Propriété} & \textbf{Réalisation dans \texttt{omega-daemon}} & \textbf{Réalisation dans \texttt{omega-controller}} \\
+        \midrule
+        Autonomie & Décisions d'éviction et d'ordonnancement sans instruction centrale & Évaluation de migration indépendante des démons locaux \\
+        Réactivité & Réponse aux défauts de page en $<$2\,ms ; ajustement CPU à 1\,ms & Mise à jour de l'état cluster sur événement ou en polling (30\,s) \\
+        Proactivité & Éviction préventive à 75\,\% d'usage ; monitoring continu & Détection anticipée des candidats à la migration avant saturation \\
+        Sociabilité & Communication TCP/TLS avec les stores pairs (\texttt{PUT\_PAGE}/\texttt{GET\_PAGE}) & Communication HTTP avec les démons ; orchestration des migrations \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+% =============================================================================
+\section{Interactions et protocoles de communication inter-agents}
+\label{sec:sma-interactions}
+% =============================================================================
+
+La collaboration entre les agents de FusionCore s'établit via trois protocoles de communication distincts, dont la sémantique s'apparente aux actes de langage formalisés par la FIPA~\cite{fipa_spec_2002}.
+
+\subsection{Le protocole de paging distant (port 9100 TCP/TLS)}
+
+Les transactions de paging distant entre un démon compute et un démon store constituent une forme de \textbf{délégation négociée} : un agent, percevant une menace de saturation mémoire locale, délègue une partie de son état (les pages froides de ses VMs) à un pair consentant, identifié par la fonction de hachage déterministe \texttt{hash(vm\_id, page\_id) mod N}. Ce protocole binaire à en-tête fixe de 20 octets (décrit à la section~\ref{subsec:protocole-tcp}) garantit une latence déterministe, condition nécessaire à la réactivité de l'agent local.
+
+\subsection{Le protocole de contrôle (ports 9200/9300 HTTP)}
+
+La communication entre le contrôleur et les démons s'effectue via des échanges HTTP/JSON. Du point de vue SMA, ces échanges correspondent à :
+\begin{itemize}
+    \item des \textbf{actes d'information} (\texttt{INFORM}) : le démon publie son état courant (\texttt{GET /api/status}) ; le contrôleur met à jour ses croyances.
+    \item des \textbf{actes de requête} (\texttt{REQUEST}) : le contrôleur envoie des instructions de quota, de hotplug ou de migration (\texttt{POST /control/...}) ; le démon exécute et confirme.
+\end{itemize}
+
+\subsection{Le mécanisme de suspicion : le circuit-breaker}
+
+La résilience de la société d'agents est assurée par le \texttt{ResilientCollector}, qui implémente un mécanisme de \textbf{suspicion formelle} analogue à l'exclusion temporaire d'un pair défaillant dans un protocole multi-agents tolérant aux fautes. Lorsqu'un agent local (démon) présente des signes de dégradation — trois échecs de communication consécutifs —, le contrôleur l'isole en ouvrant son circuit-breaker. Durant cette période, les décisions globales continuent de s'appuyer sur le dernier état connu de l'agent défaillant (TTL 120\,s), préservant l'homéostasie du cluster sans attendre le retour complet de l'agent.
+
+Ce comportement modélise une forme d'\textbf{apprentissage social négatif} : la société d'agents s'adapte à la défaillance d'un membre en réduisant sa dépendance à ses informations, protégeant la dynamique collective contre la propagation d'états incohérents.
+
+% =============================================================================
+\section{Dynamique collective et émergence de l'homéostasie}
+\label{sec:sma-emergence}
+% =============================================================================
+
+L'une des propriétés les plus remarquables de FusionCore, analysée sous l'angle SMA, est la capacité du système à maintenir l'homéostasie du cluster par la simple synergie des comportements individuels de ses agents — sans qu'aucun agent ne détienne une vue complète et instantanée de l'état global.
+
+La cascade de décisions illustrée à la figure~\ref{fig:migration-cascade} illustre cette dynamique collective : face à une pression mémoire sur le nœud A, le démon local déclenche l'éviction CLOCK (décision réactive autonome), puis ajuste le balloon virtio (décision proactive locale), puis signale l'insuffisance au contrôleur via son état exposé. Le contrôleur, agrégant les états de l'ensemble des nœuds, forme alors l'intention de migrer la VM la plus contrainte vers le nœud le plus favorable — une décision globale que ni le démon A ni aucun autre démon pris isolément n'aurait pu prendre.
+
+Cette architecture hybride — agents réactifs locaux coordonnés par un agent cognitif global — réalise le compromis fondamental des SMA : la \textbf{célérité de la réponse locale} (sub-seconde pour l'éviction et le hotplug) coexiste avec la \textbf{cohérence de l'optimisation globale} (migration multi-critères à l'échelle du cluster).
+
+En conclusion, FusionCore démontre que les concepts théoriques du SMA offrent un cadre de conception robuste et formellement justifié pour les systèmes distribués à grande échelle. L'architecture transforme la rigidité d'un hyperviseur classique en un organisme adaptatif, capable de s'auto-réguler et de survivre aux perturbations de charge par la synergie de ses agents composants, dans le plein respect des propriétés d'autonomie, de réactivité, de proactivité et de sociabilité définies par la littérature de référence~\cite{wooldridge_2002_sma,ferber_1995_sma}.

@@ -1,0 +1,51 @@
+[workspace]
+members = [
+    "node-a-agent",         # agent userfaultfd nœud A
+    "node-bc-store",        # stores distants B et C
+    "omega-daemon",         # daemon cluster complet (RAM/CPU/GPU/disque)
+    "omega-gpu-proxy",      # proxy GPU applicatif VM -> nœud GPU
+    "omega-qemu-launcher",  # wrapper QEMU — injecte le memory-backend au démarrage
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio              = { version = "1",   features = ["full"] }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+serde              = { version = "1",   features = ["derive"] }
+serde_json         = "1"
+clap               = { version = "4",   features = ["derive", "env"] }
+anyhow             = "1"
+thiserror          = "1"
+libc               = "0.2"
+dashmap            = "5"
+bytes              = "1"
+axum               = { version = "0.7", features = ["json"] }
+tower              = "0.4"
+tokio-util         = { version = "0.7", features = ["full"] }
+reqwest            = { version = "0.12", features = ["json"] }
+uuid               = { version = "1",   features = ["v4"] }
+chrono             = { version = "0.4", features = ["serde"] }
+
+# L2 — persistance pages
+sled               = "0.34"
+tempfile           = "3"
+
+# L3 — TLS sur le canal de paging
+tokio-rustls       = "0.26"
+rustls             = { version = "0.23", features = ["ring"] }
+rustls-pemfile     = "2"
+rcgen              = "0.13"
+
+# GPU multiplexeur
+async-trait        = "0.1"
+
+# Détection CPU physiques
+num_cpus           = "1"
+
+# Compression LZ4 rapide (pages mémoire VM)
+lz4_flex           = "0.11"
+futures            = "0.3"
+
+# Benchmarks
+criterion          = { version = "0.5", features = ["html_reports"] }

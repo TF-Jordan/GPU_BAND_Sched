@@ -1,0 +1,53 @@
+# Service systemd pour node-bc-store (nœud store omega-qemu-remote-memory).
+#
+# Installation :
+#   cp omega-store.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now omega-store
+#
+# Configuration via /etc/omega/store.env (créer ce fichier avant de démarrer).
+# Exemple de contenu :
+#   STORE_NODE_ID=pve2
+#   STORE_LISTEN=0.0.0.0:9100
+#   STORE_STATUS_LISTEN=0.0.0.0:9200
+#   STORE_MAX_PAGES=0
+#   STORE_DATA_PATH=/var/lib/omega-store
+#   STORE_TLS_ENABLED=true
+#   STORE_TLS_DIR=/etc/omega-store/tls
+#   RUST_LOG=info
+
+[Unit]
+Description=omega-remote-paging store (RAM paging store)
+Documentation=https://github.com/omega/omega-remote-paging
+After=network-online.target
+Wants=network-online.target
+# Redémarrage automatique si le processus crashe
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/node-bc-store
+EnvironmentFile=/etc/omega/store.env
+
+# Redémarrage sur crash (watchdog item 5)
+Restart=always
+RestartSec=3s
+
+# Watchdog kernel : si le process ne répond plus dans les 30s → restart
+# (nécessite sd_notify dans le binaire pour un watchdog actif ;
+#  en mode simple le timeout est géré par la politique Restart ci-dessus)
+TimeoutStartSec=10s
+TimeoutStopSec=15s
+
+# Sécurité minimale
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+# Logs via journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=omega-store
+
+[Install]
+WantedBy=multi-user.target
