@@ -3,125 +3,147 @@
 \label{ch:implementation-resultats}
 % =============================================================================
 
-Le passage de la modélisation à une infrastructure opérationnelle a nécessité une intégration fine avec les mécanismes internes du noyau Linux et de l'hyperviseur Proxmox~VE. Ce chapitre expose d'abord la matérialisation technique de l'architecture FusionCore — en mettant l'accent sur la transparence de l'interception mémoire et les choix d'ingénierie qui distinguent la version déployée de la conception théorique —, puis présente et discute les résultats de l'évaluation expérimentale conduite sur un banc d'essai de trois nœuds interconnectés.
+Ce chapitre présente une lecture \emph{implémentation-centrée} de FusionCore. Toutes les sections sont rédigées à partir des composants, scripts et interfaces effectivement présents dans le dépôt (daemon Rust, contrôleur Python, outillage de test, documentation d’exploitation). L’objectif est double : (i) expliciter précisément la mécanique du système ; (ii) proposer une méthode d’évaluation reproductible sans introduire de résultats non observés.
 
 % =============================================================================
-\section{Mise en œuvre et intégration infrastructurelle}
+\section{Implémentation effective}
 \label{sec:mise-en-oeuvre}
 % =============================================================================
 
-\subsection{Interception transparente de QEMU via le launcher}
+\subsection{Injection dans la chaîne Proxmox/QEMU}
 
-L'un des défis majeurs de l'implémentation résidait dans l'interfaçage avec QEMU sans altération du socle logiciel de Proxmox~VE, dont les mises à jour officielles ne doivent pas être compromises. Pour concilier ces exigences contradictoires, nous avons implémenté une couche d'interception transparente reposant sur un wrapper d'exécutable personnalisé.
+L’intégration s’appuie sur un chemin explicite : Proxmox lance \texttt{kvm}, redirigé vers \texttt{omega-qemu-launcher}, qui prépare un backend mémoire \texttt{memfd}, injecte \texttt{omega-uffd-bridge.so} dans le QEMU réel, puis connecte le descripteur \texttt{userfaultfd} au processus agent via socket Unix. Cette architecture évite les modifications du noyau Linux et préserve la maintenabilité des mises à jour Proxmox~\cite{proxmox_doc,qemu_doc,kvm_doc}.
 
-Le binaire standard \texttt{kvm}, invoqué par Proxmox lors de la création de toute VM, est remplacé par notre lanceur \texttt{omega-qemu-launcher}. Ce dernier :
+Deux conséquences techniques sont importantes :
+\begin{itemize}
+    \item le \textbf{chemin critique des défauts de page} reste en espace utilisateur, donc instrumentable par logs/métriques ;
+    \item la \textbf{transparence côté VM} est conservée : la VM ne modifie ni son noyau ni ses applications pour exploiter le paging distant.
+\end{itemize}
+
+\subsection{Plan de données Rust : modules et responsabilités}
+
+Le binaire \texttt{omega-daemon} regroupe les tâches locales suivantes :
 \begin{enumerate}
-    \item crée un descripteur de fichier de type \texttt{memfd} nommé \texttt{memfd:omega-vm-<vmid>}, qui sert de backend mémoire à la VM ;
-    \item charge dynamiquement la bibliothèque \texttt{omega-uffd-bridge.so} dans le processus QEMU via \texttt{LD\_PRELOAD} ;
-    \item transmet le descripteur \texttt{userfaultfd} créé par le bridge à l'agent local via le socket Unix \texttt{/var/lib/omega-qemu/vm-<vmid>/uffd.sock}.
+    \item \textbf{Store réseau} (TCP/TLS, port 9100) : persistance et restitution de pages ;
+    \item \textbf{EvictionEngine} : sélection de pages froides et envoi distant ;
+    \item \textbf{FaultBus} : adaptation de l’agressivité d’éviction selon le rythme des défauts ;
+    \item \textbf{QuotaRegistry} : contrôle des budgets mémoire VM avant écriture distante ;
+    \item \textbf{API cluster} (9200) et \textbf{API contrôle} (9300) ;
+    \item \textbf{ordonnanceurs locaux} : vCPU, I/O disque, budgets GPU, exécution migration.
 \end{enumerate}
 
-Cette approche garantit que l'hyperviseur délègue nativement la gestion des défauts de page à notre couche de mutualisation, tout en restant compatible avec les mises à jour logicielles officielles de Proxmox, puisque seul le point d'entrée \texttt{kvm} est intercepté.
+Le runtime asynchrone Tokio et les structures concurrentes shardées (notamment pour le store de pages) servent à limiter la contention sur l’état partagé lorsque les flux \texttt{PUT\_PAGE}/\texttt{GET\_PAGE} et la collecte métrique sont simultanés.
 
-\subsection{Déploiement et gestion des services}
+\subsection{Plan de contrôle Python : décision cluster}
 
-Le déploiement industriel s'appuie sur deux artefacts logiciels principaux :
-
+Le contrôleur \texttt{omega-controller} opère une vue globale du cluster en interrogeant l’état exporté par les nœuds. Les décisions sont structurées en trois familles :
 \begin{itemize}
-    \item \textbf{Le démon Rust (\texttt{omega-daemon}).} Compilé en mode \texttt{release} via Cargo (\texttt{make build}), il est installé comme service \texttt{systemd} sur chaque nœud. Le runtime asynchrone Tokio permet de gérer les huit tâches concurrentes du démon sans surcoût de threading. La sécurité mémoire formelle de Rust (absence de \textit{data races} garantie à la compilation) élimine une catégorie entière de bogues dans un composant système critique.
-    \item \textbf{Le contrôleur Python (\texttt{omega-controller}).} Également opéré par une unité \texttt{systemd}, il bénéficie des politiques de redémarrage automatique en cas de défaillance transitoire. Sa flexibilité facilite l'intégration avec l'API REST de Proxmox via la bibliothèque \texttt{proxmoxer}.
+    \item \textbf{admission} (faisabilité RAM/vCPU/GPU d’une nouvelle VM) ;
+    \item \textbf{placement} (choix du nœud cible par score multi-critères) ;
+    \item \textbf{migration} (live ou cold selon pression, activité VM et contraintes ressources).
 \end{itemize}
 
-L'outil \texttt{omega-lab.sh} orchestre en une seule commande la compilation, la distribution par SSH des binaires, l'installation des unités \texttt{systemd} et le remplacement du wrapper \texttt{kvm}, réduisant le temps de déploiement complet sur un cluster de trois nœuds à quelques minutes.
+Le composant \texttt{ResilientCollector} ajoute une logique de \emph{circuit-breaker} et de cache à durée limitée pour maintenir la continuité décisionnelle lors d’indisponibilités transitoires de nœuds.
 
-\subsection{Infrastructure de test et suite de validation}
+\subsection{Flux fonctionnels principaux}
 
-La robustesse de l'implémentation est assurée par deux suites de tests complémentaires :
-\begin{itemize}
-    \item \textbf{289 tests Python} (via \textit{pytest}) pour le contrôleur, couvrant les algorithmes d'admission, de placement et de migration.
-    \item \textbf{244 tests Rust} (via \textit{cargo test}) pour les bibliothèques du démon, incluant les invariants du \texttt{QuotaRegistry} et la sérialisation du protocole binaire.
-\end{itemize}
+\paragraph{Eviction/rappel d’une page.}
+\begin{enumerate}
+    \item Détection de pression mémoire locale (\texttt{/proc/meminfo}, PSI).
+    \item Sélection d’une page froide par l’algorithme CLOCK.
+    \item Émission \texttt{PUT\_PAGE} vers un store pair (TLS).
+    \item Libération locale de la page ; marquage « distante » côté tracker VM.
+    \item À l’accès ultérieur : défaut \texttt{userfaultfd}, \texttt{GET\_PAGE}, puis \texttt{UFFDIO\_COPY}.
+\end{enumerate}
 
-Ces tests constituent également la suite de régression continue du projet, exécutée automatiquement après chaque modification de la base de code.
+\paragraph{Migration pilotée par pression.}
+\begin{enumerate}
+    \item Collecte d’état cluster (RAM, CPU, GPU, I/O, contraintes VM).
+    \item Évaluation d’un nœud cible admissible.
+    \item Déclenchement \texttt{qm migrate} (live/cold selon politique).
+    \item Nettoyage post-migration : quotas, pages distantes, réservations locales.
+\end{enumerate}
 
 % =============================================================================
-\section{Protocole d'évaluation expérimentale}
+\section{Invariants techniques vérifiables}
+\label{sec:invariants-verifiables}
+% =============================================================================
+
+L’analyse croisée code + documentation opérationnelle permet d’énoncer quatre invariants techniques :
+\begin{itemize}
+    \item \textbf{I1 — Borne mémoire par VM :} les écritures de pages distantes sont validées contre un quota explicite ;
+    \item \textbf{I2 — Rôles symétriques des nœuds :} un même nœud peut simultanément émettre et héberger des pages ;
+    \item \textbf{I3 — Séparation plan critique / plan décisionnel :} le transport de pages reste découplé des API de pilotage ;
+    \item \textbf{I4 — Dégradation contrôlée :} en cas d’échec de collecte, le contrôleur bascule sur un état cache borné temporellement.
+\end{itemize}
+
+Ces invariants ne constituent pas une preuve formelle complète, mais des propriétés observables et testables via les scénarios du dépôt.
+
+% =============================================================================
+\section{Protocole d’évaluation reproductible}
 \label{sec:protocole-evaluation}
 % =============================================================================
 
-\subsection{Environnement matériel et logiciel}
+\subsection{Principe méthodologique}
 
-Les expérimentations ont été conduites sur l'infrastructure de l'outil \texttt{omega-lab.sh}, qui instancie un cluster de trois nœuds interconnectés en Gigabit Ethernet. Les nœuds s'exécutent sous Proxmox~VE 8.x avec un backend de stockage Ceph~RBD partagé, conformément à l'hypothèse~\ref{hyp:reseau-stockage}. Cette configuration garantit que seule la RAM doit être transférée lors d'une migration~\cite{clark_2005}, isolant ainsi la variable à mesurer.
+La démarche expérimentale suit le principe \og scripts-first \fg{} : toute mesure reportée doit être reproductible par un script, une commande ou un endpoint explicitement disponible dans le projet (\texttt{docs/experiments.md}, \texttt{docs/metrics.md}, scripts \texttt{omega-lab}, \texttt{run\_stress}, \texttt{collect\_baseline}).
 
-\subsection{Scénarios de test}
-
-L'évaluation est structurée autour de trois familles de scénarios, désignées \textbf{S} (scénarios de paging), \textbf{M} (scénarios de migration) et \textbf{L} (tests de charge) :
+\subsection{Scénarios retenus et variables observées}
 
 \begin{table}[htbp]
     \centering
-    \caption{Scénarios d'évaluation et objectifs de conception associés.}
+    \caption{Scénarios, instrumentation et critères d’interprétation.}
     \label{tab:scenarios-eval}
-    \begin{tabular}{c p{0.45\linewidth} c}
+    \begin{tabular}{p{0.13\linewidth} p{0.27\linewidth} p{0.25\linewidth} p{0.25\linewidth}}
         \toprule
-        \textbf{Scénario} & \textbf{Description} & \textbf{Objectif vérifié} \\
+        \textbf{ID} & \textbf{Procédure} & \textbf{Instrumentation} & \textbf{Critère observé} \\
         \midrule
-        S1--S3 & Latence de rappel GET\_PAGE sous charge réseau variable & G1 \\
-        S4--S5 & Vérification de l'invariant de quota sous rafales & G5 \\
-        S6--S8 & Comportement de l'algorithme CLOCK (hit rate) & G1, G2 \\
-        M1--M3 & Migration live déclenchée par pression RAM & G4 \\
-        M4--M7 & Migration cold sur VM idle, résilience circuit-breaker & G4 \\
-        L1     & Saturation cluster à 500~VMs concurrentes simulées & G4, G5 \\
+        S1 & \texttt{node-a-agent --mode demo} & logs agent + store & intégrité lecture/écriture pages \\
+        S2 & stress mémoire local & \texttt{/proc/meminfo} + PSI & activation éviction et variation \texttt{MemAvailable} \\
+        S3 & rappel de pages sous charge & logs \texttt{page fault}/\texttt{GET\_PAGE} & distribution de latence de rappel \\
+        M1 & migration live déclenchée API & sortie \texttt{qm migrate --online} & succès opérationnel + continuité service \\
+        M2 & migration cold (VM idle/pression) & état pre/post migration & nettoyage ressources source \\
+        R1 & indisponibilité d’un store & logs collecteur + cache TTL & maintien du pilotage cluster \\
         \bottomrule
     \end{tabular}
 \end{table}
 
+\subsection{Familles de métriques}
+
+\begin{itemize}
+    \item \textbf{Store distant :} \texttt{pages\_stored}, \texttt{put\_count}, \texttt{get\_count}, \texttt{hit\_rate\_pct}, connexions actives.
+    \item \textbf{Agent/daemon :} \texttt{fault\_count}, \texttt{fault\_served}, \texttt{fault\_errors}, \texttt{pages\_evicted}, \texttt{pages\_fetched}.
+    \item \textbf{Système :} cgroups v2 (CPU/I/O), PSI mémoire/I/O, \texttt{/proc/meminfo}.
+    \item \textbf{Export Prometheus :} endpoint \texttt{/control/metrics} pour consolidation temporelle.
+\end{itemize}
+
 % =============================================================================
-\section{Résultats et analyse}
+\section{Analyse technique et discussion}
 \label{sec:resultats}
 % =============================================================================
 
-\subsection{Latence de rappel des pages (objectif G1)}
+\subsection{Comportement du paging distant}
 
-La mesure de la latence de rappel constitue le baromètre de stabilité le plus direct du système, car elle conditionne le comportement perçu par les processus invités lors d'un accès à une page distante. La latence est mesurée comme la durée entre la levée de l'événement \texttt{UFFD\_EVENT\_PAGEFAULT} et l'exécution effective du \texttt{UFFDIO\_COPY} par le démon.
+Les scénarios de validation montrent une chaîne cohérente éviction\,$\rightarrow$\,stockage distant\,$\rightarrow$\,rappel à la demande. L’effet dominant sur la performance perçue est la latence réseau (aller-retour + contention), devant le coût cryptographique TLS dans le contexte GbE visé par le projet.
 
-Sur notre infrastructure Gigabit Ethernet, le délai moyen pour l'opération \texttt{GET\_PAGE} s'établit à \textbf{1,8\,ms}, incluant l'interception par \texttt{userfaultfd}, le transfert réseau et le chiffrement AES-256-GCM. Cette valeur respecte confortablement le seuil critique de 2\,ms fixé par l'objectif G1, avec une marge de 10\,\%. La décomposition du budget de latence est la suivante :
+\subsection{Interaction entre ordonnancement local et migration}
 
-\begin{table}[htbp]
-    \centering
-    \caption{Décomposition du budget de latence de rappel sur Gigabit Ethernet.}
-    \label{tab:budget-latence}
-    \begin{tabular}{l r r}
-        \toprule
-        \textbf{Composante} & \textbf{Durée mesurée} & \textbf{Part du budget} \\
-        \midrule
-        Interception \texttt{userfaultfd} + ordonnancement & $\sim$200\,µs & 11\,\% \\
-        Chiffrement TLS~1.3 (AES-256-GCM, 4\,Kio) & $\sim$1,2\,µs & $<$1\,\% \\
-        Transfert réseau aller-retour (Gigabit) & $\sim$1\,500\,µs & 83\,\% \\
-        Copie \texttt{UFFDIO\_COPY} & $\sim$100\,µs & 6\,\% \\
-        \midrule
-        \textbf{Total mesuré} & \textbf{$\approx$1,8\,ms} & 90\,\% du budget \\
-        \bottomrule
-    \end{tabular}
-\end{table}
+FusionCore applique une stratégie hiérarchique : ajustement local d’abord (vCPU, \texttt{cpu.weight}, \texttt{io.weight}, budgets GPU), puis migration si la pression persiste. Cette séquence réduit le risque d’oscillation (migrations répétées) et préserve les migrations pour les cas où l’élasticité locale devient insuffisante.
 
-Ces mesures confirment deux résultats importants. Premièrement, le surcoût de chiffrement TLS~1.3 est négligeable ($<$1\,\%) : l'activation systématique du chiffrement est donc justifiée sans pénalité de performance significative. Deuxièmement, la latence réseau constitue le facteur dominant (83\,\%), ce qui confirme que l'amélioration principale passerait, à terme, par un transport RDMA — au prix de la généralité de déploiement.
+\subsection{Robustesse en présence de pannes partielles}
 
-L'analyse du \textit{hit rate} des stores distants lors des scénarios S6--S8 démontre que l'algorithme d'éviction CLOCK isole efficacement les pages froides : les pages les plus fréquemment accédées restent en RAM locale, limitant le trafic réseau aux seules données inactives à court terme.
+Le circuit-breaker du collecteur évite qu’un nœud temporairement indisponible bloque le contrôleur. Le compromis associé est explicite : pendant la fenêtre de cache, la décision peut s’appuyer sur un état partiellement obsolète. Cette limite est acceptable en mode dégradé, mais doit être intégrée au réglage des seuils de migration.
 
-\subsection{Efficacité de l'ordonnancement élastique des vCPU (objectif G1, G5)}
+% =============================================================================
+\section{Limites actuelles et perspectives}
+\label{sec:discussion-limites}
+% =============================================================================
 
-L'ordonnanceur vCPU démontre une réactivité élevée : les opérations de hotplug et d'hot-unplug de cœurs virtuels sont effectuées en moins d'une seconde dès la détection du franchissement des seuils configurés (80\,\% pour le scale-up, 35\,\% pour le scale-down). Ce dynamisme permet d'alléger la pression sur le noyau hôte de plus de \textbf{30\,\%} lors des périodes de faible activité des invités, par retrait progressif des vCPU surnuméraires et ajustement des poids \texttt{cpu.weight}.
+\begin{itemize}
+    \item \textbf{Sensibilité réseau :} la qualité du paging distant dépend fortement de la latence et de la gigue inter-nœuds.
+    \item \textbf{Coût d’observabilité :} l’analyse post-mortem requiert une corrélation multi-sources (agent, daemon, controller, système).
+    \item \textbf{Paramétrage dépendant du contexte :} les seuils d’éviction/migration doivent être calibrés pour chaque cluster réel.
+    \item \textbf{Hétérogénéité GPU :} la contrainte de topologie matérielle réduit parfois fortement l’espace de placement.
+\end{itemize}
 
-La boucle \texttt{FaultBus} $\leftrightarrow$ \texttt{AdaptiveInterval} s'est montrée efficace pour prévenir le \textit{thrashing} : lors des scénarios S4--S5, aucune VM ne dépasse son quota mémoire négocié, validant l'invariant de la Proposition~\ref{prop:quota-invariant} dans toutes les conditions testées.
-
-\subsection{Multiplexage GPU}
-
-Le multiplexage GPU a été validé par l'exécution concurrente de flux d'encodage vidéo sur une unique carte physique, hébergée sur un nœud du cluster. La sérialisation par le démon arbitre (\texttt{omega-daemon}) préserve la cohérence des accès au pilote GPU, sans modification du pilote noyau. Le contrôle d'admission par budget VRAM garantit qu'aucune VM ne dépasse son allocation, conformément au mécanisme décrit à la section~\ref{sec:gpu-multiplexer}.
-
-\subsection{Résilience et scalabilité sous charge (objectif G4)}
-
-La robustesse de la couche de contrôle a été éprouvée par le scénario L1, simulant jusqu'à \textbf{500 machines virtuelles concurrentes}. Sous cette charge, l'usage de \texttt{DashMap} shardé pour le \texttt{PageStore} (éliminant le verrou global) maintient une consommation mémoire du plan de données linéaire et prévisible, sans dégradation des latences de rappel au-delà du seuil G1.
-
-La validation du mécanisme de résilience (\textit{circuit-breaker}) lors des scénarios M4--M7 confirme que la mise hors ligne simulée d'un nœud store ne provoque pas de blocage du contrôleur : après trois échecs consécutifs, le circuit s'ouvre et les décisions de migration continuent de s'appuyer sur le dernier état en cache (TTL de 120\,s), conformément à l'objectif G4.
-
-Ces résultats établissent que FusionCore ne se limite pas à une preuve de concept : il constitue une infrastructure capable de supporter des environnements académiques denses et à charge imprévisible, tout en préservant les garanties formelles d'isolation définies au chapitre~\ref{cp:analyse-conception}.
+En résumé, l’implémentation actuelle valide la faisabilité d’une mutualisation multi-ressources en espace utilisateur dans Proxmox, avec un protocole d’évaluation reproductible. La consolidation scientifique complète (comparaison quantitative inter-architectures, étude statistique longue durée) constitue une étape ultérieure qui doit être conduite sur banc instrumenté stable.
