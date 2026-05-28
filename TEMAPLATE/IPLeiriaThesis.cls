@@ -162,7 +162,7 @@
 \RequirePackage{eso-pic}
 \RequirePackage{setspace}
 \RequirePackage[newfloat]{minted}
-\RequirePackage{silence}
+% \RequirePackage{silence}
 \RequirePackage{fontawesome5}
 \RequirePackage{calc}
 \RequirePackage{soul}
@@ -172,7 +172,7 @@
 \RequirePackage{blindtext}
 
 \tcbuselibrary{most}
-\WarningsOff[blindtext]
+% \WarningsOff[blindtext]
 
 % =============================================================================
 % Config 00: Fonts

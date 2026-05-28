@@ -505,7 +505,7 @@ Le système, par choix de conception, ne traite pas certains cas. Ces limitation
 \begin{itemize}[leftmargin=*]
     \item \textbf{Pas de modification du noyau.} Tout fonctionne en espace utilisateur via \texttt{userfaultfd}. Conséquence : les optimisations qui nécessiteraient un patch (par exemple, traitement direct des \emph{huge pages}) ne sont pas disponibles.
     \item \textbf{Pas de remplacement de QEMU/KVM.} La virtualisation reste inchangée. Conséquence : aucune optimisation \emph{KSM-aware} ou \emph{post-copy migration} custom.
-    \item \textbf{Pas de migration de disque local.} L'hypothèse Ceph RBD partagé est centrale. Sur un cluster sans stockage partagé, l'option \texttt{--with-local-disks} de \texttt{qm migrate} est utilisable mais sort du périmètre de mesure de ce mémoire.
+    \item \textbf{Pas de migration de disque local.} L'hypothèse Ceph RBD partagé est centrale. Sur un cluster sans stockage partagé, l'option \texttt{--with-local-disks} de \texttt{qm migrate} est utilisable mais sort du périmètre de mesure de ce rapport.
     \item \textbf{Pas de QoS matérielle SAN/Ceph.} Seul l'arbitrage local cgroup~v2 est mis en œuvre.
     \item \textbf{Pas de remplacement de Proxmox HA.} La tolérance aux pannes nœud reste celle de Proxmox natif.
     \item \textbf{Compression LZ4 disponible mais non activée par défaut.} Le bit \texttt{FLAG\_COMPRESSED} et le code de compression sont opérationnels ; l'activation est laissée à l'opérateur via configuration.

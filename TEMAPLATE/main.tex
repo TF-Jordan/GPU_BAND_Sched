@@ -22,8 +22,11 @@
 \usepackage{amsthm}
 \usepackage{amssymb}
 \usepackage[french, ruled, vlined, linesnumbered]{algorithm2e}
+\usepackage{float}
 \SetKwInput{KwData}{Données}
 \SetKwInput{KwResult}{Résultat}
+\SetKwFor{Try}{Try}{}{}
+\SetKwFor{Catch}{Catch}{}{}
 
 % ─── Environnements de type article scientifique ─────────────────────────────
 \theoremstyle{definition}
@@ -315,7 +318,7 @@
 \chapter*{Remerciements}
 \addcontentsline{toc}{chapter}{Remerciements}
 
-Ce mémoire est l'aboutissement d'un travail d'ingénierie collectif mené dans le cadre du projet \emph{GRID ONE} de l'École Nationale Supérieure Polytechnique de Yaoundé. Nous tenons à exprimer notre profonde gratitude à toutes les personnes qui ont contribué à le rendre possible.
+Ce rapport est l\'aboutissement d'un travail d'ingénierie collectif mené dans le cadre du projet \emph{GRID ONE} de l'École Nationale Supérieure Polytechnique de Yaoundé. Nous tenons à exprimer notre profonde gratitude à toutes les personnes qui ont contribué à le rendre possible.
 
 Nos remerciements s'adressent en premier lieu à notre superviseur, le \textbf{Pr. Thomas Djotio Ndié}, dont la rigueur scientifique, la disponibilité et les orientations méthodologiques ont guidé chacune des étapes de la conception et de l'implémentation du système \emph{omega-remote-paging}.
 
@@ -328,7 +331,7 @@ Nous saluons enfin l'esprit de coopération qui a régné entre les équipes du 
 \chapter*{Résumé}
 \addcontentsline{toc}{chapter}{Résumé}
 
-Dans un cluster \emph{Proxmox~VE} configuré par défaut, les ressources matérielles --- mémoire vive, processeurs virtuels, accélérateurs graphiques et bande passante de stockage --- sont cloisonnées au niveau du nœud. Une machine virtuelle créée sur un nœud saturé est refusée à l'admission même si le cluster, considéré globalement, dispose d'une marge confortable. Le mécanisme natif d'attribution GPU (\emph{VFIO passthrough}) verrouille un accélérateur entier à une seule machine virtuelle ; les processeurs virtuels demeurent statiques après la création ; les contentions d'entrées-sorties disque ne sont arbitrées qu'à l'aveugle par le noyau. Ce gaspillage structurel constitue le problème adressé par le présent mémoire.
+Dans un cluster \emph{Proxmox~VE} configuré par défaut, les ressources matérielles --- mémoire vive, processeurs virtuels, accélérateurs graphiques et bande passante de stockage --- sont cloisonnées au niveau du nœud. Une machine virtuelle créée sur un nœud saturé est refusée à l'admission même si le cluster, considéré globalement, dispose d'une marge confortable. Le mécanisme natif d'attribution GPU (\emph{VFIO passthrough}) verrouille un accélérateur entier à une seule machine virtuelle ; les processeurs virtuels demeurent statiques après la création ; les contentions d'entrées-sorties disque ne sont arbitrées qu'à l'aveugle par le noyau. Ce gaspillage structurel constitue le problème adressé par le présent rapport.
 
 Nous proposons \textbf{omega-remote-paging} (nom de code \emph{FusionCore}), un système de mutualisation des ressources qui transforme un cluster Proxmox VE de trois nœuds ou plus en un pool de ressources fongibles, \emph{sans modification du noyau Linux ni de QEMU}. Le système repose sur quatre piliers techniques : (i) un mécanisme de \emph{paging distant} qui déplace les pages mémoire froides d'une machine virtuelle vers la RAM d'un autre nœud via \texttt{userfaultfd}, avec rappel transparent en moins de cinq millisecondes ; (ii) un \emph{ordonnanceur élastique} qui ajuste dynamiquement les processeurs virtuels via le protocole QMP en s'appuyant sur les compteurs cgroups~v2 et l'information de pression PSI ; (iii) un \emph{multiplexeur GPU} qui rompt le verrou du passthrough exclusif en arbitrant les accès au pilote DRM avec une élection de leader par \texttt{flock} ; (iv) une \emph{migration automatique} live ou cold pilotée par un score multi-critères pondéré \mbox{(RAM 50\,\% --- topologie 25\,\% --- CPU 15\,\% --- migrations actives 10\,\%)}.
 

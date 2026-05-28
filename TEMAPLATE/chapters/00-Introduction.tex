@@ -7,7 +7,7 @@
 
 \section*{Contexte : le projet \emph{GRID ONE}}
 
-Au sein de l'\acrshort{enspy}, un constat récurrent motive le projet collectif \emph{GRID ONE} dont s'inspire le présent mémoire. Un étudiant de cinquième année --- pris en figure emblématique sous le prénom de \emph{Karlos} dans la présentation fondatrice du projet --- dispose, pour mener à bien ses projets de fin d'études en intelligence artificielle, d'un ordinateur portable de bureautique équipé d'un processeur \texttt{Intel Core~i3-8130U} (deux cœurs, quatre fils d'exécution), de quatre giga-octets de mémoire vive et d'une carte graphique intégrée \texttt{Intel UHD Graphics~620}. Avec cette configuration, entraîner un modèle de langage de taille même modeste relève de l'impossibilité technique, tandis que la location de temps de calcul sur le \emph{cloud} public reste financièrement hors de portée. Le coût d'opportunité est élevé : projets repoussés, performances dégradées dans les unités d'enseignement \emph{Systèmes Multi-Agents} et \emph{Systèmes Embarqués}, et, à plus long terme, érosion de la compétitivité scientifique de l'établissement.
+Au sein de l'\acrshort{enspy}, un constat récurrent motive le projet collectif \emph{GRID ONE} dont s'inspire le présent rapport. Un étudiant de cinquième année --- pris en figure emblématique sous le prénom de \emph{Karlos} dans la présentation fondatrice du projet --- dispose, pour mener à bien ses projets de fin d'études en intelligence artificielle, d'un ordinateur portable de bureautique équipé d'un processeur \texttt{Intel Core~i3-8130U} (deux cœurs, quatre fils d'exécution), de quatre giga-octets de mémoire vive et d'une carte graphique intégrée \texttt{Intel UHD Graphics~620}. Avec cette configuration, entraîner un modèle de langage de taille même modeste relève de l'impossibilité technique, tandis que la location de temps de calcul sur le \emph{cloud} public reste financièrement hors de portée. Le coût d'opportunité est élevé : projets repoussés, performances dégradées dans les unités d'enseignement \emph{Systèmes Multi-Agents} et \emph{Systèmes Embarqués}, et, à plus long terme, érosion de la compétitivité scientifique de l'établissement.
 
 Or, dans les locaux de l'ENSPY se trouvent paradoxalement des dizaines de machines fonctionnelles partiellement abandonnées : tours, serveurs déclassés, équipements de salles serveurs reconvertibles. C'est de l'observation de ce paradoxe --- ressources sous-utilisées d'un côté, besoins non couverts de l'autre --- qu'est née l'idée fondatrice de \emph{GRID ONE} : agréger les machines existantes en un cluster commun, en exposer les capacités via un portail libre-service, et permettre aux étudiants, enseignants et chercheurs de réserver à la demande des machines virtuelles correctement dimensionnées pour leurs travaux.
 
@@ -20,7 +20,7 @@ Or, dans les locaux de l'ENSPY se trouvent paradoxalement des dizaines de machin
     \item \textbf{ORION} (\emph{Parallax}) --- calcul distribué : exposition de frameworks de parallélisation (MPI/OpenMPI, Ray, Dask), benchmarks de validation, plateforme de soumission de jobs.
 \end{itemize}
 
-\textbf{Le présent mémoire porte exclusivement sur la mission de l'équipe OMEGA}, et plus précisément sur son cœur logiciel \emph{omega-remote-paging}, alias \emph{FusionCore}, dont l'objectif est de transformer un cluster Proxmox~VE configuré par défaut en un pool de ressources mutualisées. Les autres composants de \emph{GRID ONE} (infrastructure physique, portail, calcul distribué) ne sont mentionnés que dans la mesure où ils constituent le terrain d'opération et les consommateurs naturels du système conçu ici.
+\textbf{Le présent rapport porte exclusivement sur la mission de l'équipe OMEGA}, et plus précisément sur son cœur logiciel \emph{omega-remote-paging}, alias \emph{FusionCore}, dont l'objectif est de transformer un cluster Proxmox~VE configuré par défaut en un pool de ressources mutualisées. Les autres composants de \emph{GRID ONE} (infrastructure physique, portail, calcul distribué) ne sont mentionnés que dans la mesure où ils constituent le terrain d'opération et les consommateurs naturels du système conçu ici.
 
 \section*{Problématique : les quatre verrous de Proxmox~VE par défaut}
 
@@ -60,11 +60,11 @@ L'atteinte de l'objectif général s'inscrit dans la tradition des systèmes d'e
 
 \section*{Méthodologie générale}
 
-La démarche d'ingénierie suivie repose sur trois principes simples mais structurants. Le premier est l'\emph{itération sur le terrain} : chaque évolution conceptuelle a été validée d'abord sur un lab \acrshort{kvm} mono-machine simulant trois nœuds, puis sur le cluster Proxmox réel de \emph{GRID ZERO} fourni par l'équipe ATLAS. Le second est le \emph{code comme source de vérité} : aucune affirmation du présent mémoire ne sera formulée sans qu'elle soit traçable dans un module, un test ou un fichier de configuration du dépôt. Le troisième est l'\emph{instrumentation systématique} : tout chemin chaud est porteur d'un compteur Prometheus, tout choix de placement est journalisé en \texttt{structlog}.
+La démarche d'ingénierie suivie repose sur trois principes simples mais structurants. Le premier est l'\emph{itération sur le terrain} : chaque évolution conceptuelle a été validée d'abord sur un lab \acrshort{kvm} mono-machine simulant trois nœuds, puis sur le cluster Proxmox réel de \emph{GRID ZERO} fourni par l'équipe ATLAS. Le second est le \emph{code comme source de vérité} : aucune affirmation du présent rapport ne sera formulée sans qu'elle soit traçable dans un module, un test ou un fichier de configuration du dépôt. Le troisième est l'\emph{instrumentation systématique} : tout chemin chaud est porteur d'un compteur Prometheus, tout choix de placement est journalisé en \texttt{structlog}.
 
 L'écriture du code se fait en \emph{Rust} pour le démon (sûreté mémoire, performances asynchrones via Tokio), en \emph{Python} pour le contrôleur cluster (richesse de l'écosystème de manipulation REST, prototypage rapide des politiques), et en \emph{C} minimal pour le \emph{bridge} \texttt{LD\_PRELOAD} qui s'injecte dans le processus QEMU réel.
 
-\section*{Contributions du mémoire}
+\section*{Contributions du rapport}
 
 Les contributions de ce travail, par ordre de matérialité technique, sont les suivantes :
 
@@ -77,9 +77,9 @@ Les contributions de ce travail, par ordre de matérialité technique, sont les 
     \item Une \emph{bibliothèque d'images Ubuntu Server} personnalisées avec \acrshort{cubic}, dont la méthodologie de production est consignée en annexe.
 \end{itemize}
 
-\section*{Plan du mémoire}
+\section*{Plan du rapport}
 
-Le présent mémoire est organisé en quatre chapitres principaux, encadrés par la présente introduction et une conclusion générale. Le projet ayant été conduit dans le cadre du cours de \emph{Systèmes Multi-Agents} (SMA) du Département de Génie Informatique de l'\acrshort{enspy}, un chapitre est explicitement consacré à la lecture multi-agents du système.
+Le présent rapport est organisé en quatre chapitres principaux, encadrés par la présente introduction et une conclusion générale. Le projet ayant été conduit dans le cadre du cours de \emph{Systèmes Multi-Agents} (SMA) du Département de Génie Informatique de l'\acrshort{enspy}, un chapitre est explicitement consacré à la lecture multi-agents du système.
 
 Le \textbf{chapitre~1 (Généralités et état de l'art)} pose les fondations techniques nécessaires à la compréhension de la suite : architecture interne de Proxmox~VE, modèle mémoire de Linux et mécanisme \texttt{userfaultfd}, cgroups~v2 et information de pression PSI, modèles de partage GPU (VFIO, vGPU, \emph{mediated devices}, DRM), techniques de migration KVM (pre-copy, dirty bitmap). Une section est consacrée aux travaux antérieurs sur la \emph{disaggregated memory} (Infiniswap, LegoOS, Carbink, Pond), avec un positionnement explicite de notre approche.
 
@@ -91,4 +91,4 @@ Le \textbf{chapitre~4 (Implémentation et résultats)} décrit l'implémentation
 
 La \textbf{conclusion générale} synthétise la contribution, replace le travail dans le cadre du projet \emph{GRID ONE}, et ouvre sur des perspectives concrètes de prolongement.
 
-Quatre annexes complètent le mémoire : la spécification complète du protocole binaire (annexe~A), le catalogue des points d'entrée HTTP du démon et du contrôleur (annexe~B), le référentiel des métriques Prometheus (annexe~C), et la documentation de production des images Ubuntu Server avec \acrshort{cubic} (annexe~D).
+Quatre annexes complètent le rapport : la spécification complète du protocole binaire (annexe~A), le catalogue des points d'entrée HTTP du démon et du contrôleur (annexe~B), le référentiel des métriques Prometheus (annexe~C), et la documentation de production des images Ubuntu Server avec \acrshort{cubic} (annexe~D).
