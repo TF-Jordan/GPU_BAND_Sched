@@ -4,7 +4,7 @@
 \chapter{Création et utilisation d'ISO Ubuntu personnalisées avec CUBIC}
 \label{annexe:iso}
 
-Cette annexe documente la méthodologie de production des images ISO Ubuntu Server personnalisées qui constituent le second livrable de l'équipe OMEGA dans le projet \emph{GRID ONE} (cible : dix images métier de type \texttt{ENSPY-DeepLearning}, \texttt{ENSPY-DevOps}, \texttt{ENSPY-CyberSec}, etc.). L'outil utilisé est \textbf{CUBIC} (\emph{Custom Ubuntu ISO Creator}). Trois profils ont été produits et documentés ici à titre d'illustration de la chaîne : \emph{développement}, \emph{interface graphique}, \emph{machine learning}.
+Cette annexe documente la méthodologie de production des images ISO Ubuntu Server personnalisées qui constituent le second livrable de l'équipe OMEGA dans le projet \emph{GRIDONE} (cible : dix images métier de type \texttt{ENSPY-DeepLearning}, \texttt{ENSPY-DevOps}, \texttt{ENSPY-CyberSec}, etc.). L'outil utilisé est \textbf{CUBIC} (\emph{Custom Ubuntu ISO Creator}). Trois profils ont été produits et documentés ici à titre d'illustration de la chaîne : \emph{développement}, \emph{interface graphique}, \emph{machine learning}.
 
 \section{Objectifs}
 
@@ -241,7 +241,7 @@ La personnalisation d'une ISO peut introduire des risques si elle est mal maîtr
     \item conserver l'ISO officielle comme base de secours.
 \end{itemize}
 
-Si l'ISO est destinée à être partagée (par exemple, publication sur le pool Ceph de \emph{GRID ONE}), il faut s'assurer qu'elle ne contient aucune donnée personnelle, aucun identifiant et aucun fichier confidentiel.
+Si l'ISO est destinée à être partagée (par exemple, publication sur le pool Ceph de \emph{GRIDONE}), il faut s'assurer qu'elle ne contient aucune donnée personnelle, aucun identifiant et aucun fichier confidentiel.
 
 \section{Fiche de suivi}
 
@@ -299,7 +299,7 @@ systemctl status NetworkManager
 systemctl status gdm3
 \end{lstlisting}
 
-\section{Cible des dix images métier de GRID ONE}
+\section{Cible des dix images métier de GRIDONE}
 
 La cible définie par les ingénieurs porteurs du projet est de produire dix images, dont les trois décrites ici constituent les fondations. Le tableau~\ref{tab:images-cible} récapitule la cible complète.
 
@@ -322,7 +322,7 @@ ENSPY-HPC          & Calcul HP      & OpenMPI + OpenMP + BLAS + LAPACK + Intel o
 ENSPY-Research     & Recherche      & LaTeX + Zotero + Python scientifique + Octave \\
 \bottomrule
 \end{tabular}
-\caption{Cible des dix images OS métier de GRID ONE.}
+\caption{Cible des dix images OS métier de GRIDONE.}
 \label{tab:images-cible}
 \end{table}
 
@@ -330,4 +330,4 @@ Les images ENSPY-DeepLearning, ENSPY-Research et ENSPY-WebDev correspondent resp
 
 \section{Conclusion}
 
-La création d'images Ubuntu Server personnalisées avec CUBIC permet de préparer des systèmes adaptés à des usages précis tout en réduisant le temps de configuration après installation. À partir d'Ubuntu Server, trois variantes ont été produites (développement, interface graphique, machine learning) et sept restent à compléter pour atteindre la cible \emph{GRID ONE}. La méthodologie présentée --- chroot CUBIC, installation par profil, nettoyage, génération, test en \acrshort{vm} --- est reproductible et constitue la procédure standard de l'équipe OMEGA pour la bibliothèque d'images du portail \emph{Horizon}.
+La création d'images Ubuntu Server personnalisées avec CUBIC permet de préparer des systèmes adaptés à des usages précis tout en réduisant le temps de configuration après installation. À partir d'Ubuntu Server, trois variantes ont été produites (développement, interface graphique, machine learning) et sept restent à compléter pour atteindre la cible \emph{GRIDONE}. La méthodologie présentée --- chroot CUBIC, installation par profil, nettoyage, génération, test en \acrshort{vm} --- est reproductible et constitue la procédure standard de l'équipe OMEGA pour la bibliothèque d'images du portail \emph{Horizon}.

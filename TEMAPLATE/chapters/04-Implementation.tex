@@ -4,7 +4,6 @@
 \chapter{Implémentation et résultats}
 \label{chap:implementation}
 
-\section*{Introduction du chapitre}
 
 Ce chapitre rend compte de la mise en œuvre concrète des concepts présentés au chapitre~\ref{chap:conception} et des résultats expérimentaux obtenus. Nous décrivons d'abord l'environnement matériel et logiciel cible, puis l'organisation du dépôt et du workspace Rust. Nous détaillons ensuite les implémentations module par module, l'intégration QEMU transparente, le déploiement et l'outillage opérationnel, la stratégie de tests à cinq niveaux, et nous présentons les résultats expérimentaux mesurés sur le banc local et les cibles documentées pour le cluster réel. Nous discutons enfin les limitations assumées du système et traçons les perspectives.
 
@@ -12,9 +11,9 @@ Ce chapitre rend compte de la mise en œuvre concrète des concepts présentés 
 \section{Environnement matériel et logiciel}
 \label{sec:env}
 
-\subsection{Cluster cible : \emph{GRID ZERO}}
+\subsection{Cluster cible : \emph{GRIDZERO}}
 
-Le cluster de référence est \emph{GRID ZERO}, monté par l'équipe ATLAS du projet \emph{GRID ONE}. Sa composition matérielle est synthétisée dans le tableau~\ref{tab:gridzero}. Quatre nœuds physiques sont raccordés en VLANs séparés (management 1~Gb/s, stockage Ceph 10/25~Gb/s SFP+, public 1~Gb/s). Un onduleur en amont assure la tolérance aux coupures du réseau électrique. La salle est instrumentée (température, humidité) par les capteurs IoT déployés par ATLAS.
+Le cluster de référence est \emph{GRIDZERO}, monté par l'équipe ATLAS du projet \emph{GRIDONE}. Sa composition matérielle est synthétisée dans le tableau~\ref{tab:gridzero}. Quatre nœuds physiques sont raccordés en VLANs séparés (management 1~Gb/s, stockage Ceph 10/25~Gb/s SFP+, public 1~Gb/s). Un onduleur en amont assure la tolérance aux coupures du réseau électrique. La salle est instrumentée (température, humidité) par les capteurs IoT déployés par ATLAS.
 
 \begin{table}[H]
 \centering
@@ -35,7 +34,7 @@ Réseau management        & 1 Gb/s RJ45 (VLAN dédié) \\
 Réseau public            & 1 Gb/s RJ45 (utilisateurs ENSPY) \\
 \bottomrule
 \end{tabular}
-\caption{Caractéristiques matérielles du cluster \emph{GRID ZERO}.}
+\caption{Caractéristiques matérielles du cluster \emph{GRIDZERO}.}
 \label{tab:gridzero}
 \end{table}
 
@@ -271,7 +270,7 @@ Le tableau~\ref{tab:qemu-flow} illustre cette chaîne.
 \label{tab:qemu-flow}
 \end{table}
 
-L'aspect remarquable de cette intégration est qu'aucune ligne du code source de QEMU n'a été modifiée, et qu'une VM Proxmox standard peut être migrée sous \emph{omega-remote-paging} sans modification de son fichier de configuration \texttt{/etc/pve/qemu-server/\{vmid\}.conf}, à l'exception du flag \texttt{hotplug=...} si l'on souhaite activer le hotplug vCPU.
+L'aspect remarquable de cette intégration est qu'aucune ligne du code source de QEMU n'a été modifiée, et qu'une VM Proxmox standard peut être migrée sous \emph{FusionCore} sans modification de son fichier de configuration \texttt{/etc/pve/qemu-server/\{vmid\}.conf}, à l'exception du flag \texttt{hotplug=...} si l'on souhaite activer le hotplug vCPU.
 
 % -----------------------------------------------------------------------------
 \section{Déploiement et outillage opérationnel}
@@ -409,7 +408,7 @@ Les benchmarks complémentaires sur l'algorithme CLOCK (crate \texttt{node-a-age
 
 \subsection{Latences cluster cibles et méthodologie}
 
-Sur le cluster réel \emph{GRID ZERO}, la mesure de latence de bout en bout d'un défaut de page distant suit la méthodologie documentée dans \texttt{docs/experiments.md} :
+Sur le cluster réel \emph{GRIDZERO}, la mesure de latence de bout en bout d'un défaut de page distant suit la méthodologie documentée dans \texttt{docs/experiments.md} :
 
 \begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
 RUST_LOG=debug ./target/release/node-a-agent \
@@ -522,12 +521,11 @@ Plusieurs axes d'évolution se dessinent à partir de l'état actuel du système
     \item \textbf{Activation conditionnelle de la compression LZ4.} Les benchmarks Criterion montrent un coût négligeable de la compression face à son bénéfice réseau ; l'activation par défaut --- avec opt-out par variable d'environnement --- est une amélioration immédiate.
     \item \textbf{Prefetch des pages adjacentes.} Le bit \texttt{0x02} du champ \texttt{flags} est réservé dans le protocole pour un prefetch hint. L'implémentation consisterait à fetcher les pages \([p, p+k)\) en parallèle de la page demandée \(p\), où \(k\) est calibré par observation.
     \item \textbf{Support RDMA (RoCE ou Infiniband).} Pour les clusters équipés, un backend de transport RDMA réduirait la latence de \texttt{GET\_PAGE} d'environ un ordre de grandeur. L'architecture en \emph{trait Transport} du démon facilite cette évolution.
-    \item \textbf{Backend Ceph systématique pour les stores.} La couche \texttt{CephStore} est implémentée et activée par détection (\texttt{librados} + \texttt{/etc/ceph/ceph.conf}). Sur le cluster \emph{GRID ZERO} qui dispose déjà de Ceph, son activation systématique simplifierait l'opération (les pages survivent à un redémarrage de démon).
+    \item \textbf{Backend Ceph systématique pour les stores.} La couche \texttt{CephStore} est implémentée et activée par détection (\texttt{librados} + \texttt{/etc/ceph/ceph.conf}). Sur le cluster \emph{GRIDZERO} qui dispose déjà de Ceph, son activation systématique simplifierait l'opération (les pages survivent à un redémarrage de démon).
     \item \textbf{Intégration avec le portail Horizon (équipe SIGMA).} L'API \texttt{/control/admit} peut être consommée par le backend FastAPI du portail pour faire de l'admission \emph{cluster-aware} en amont de la création de VM par \texttt{proxmoxer}.
     \item \textbf{Substrat pour ORION/Parallax.} Les ressources mutualisées (RAM, vCPU, GPU) sont des matières premières naturelles pour le scheduling distribué Ray/MPI/Dask piloté par ORION. Une intégration consisterait à exposer aux \emph{workers} Ray des budgets explicites issus de notre \texttt{QuotaRegistry}.
-    \item \textbf{Couverture de la bibliothèque OS métier.} Le rapport \acrshort{cubic} (annexe~\ref{annexe:iso}) couvre trois profils (dev, GUI, ML) ; la cible de dix images du projet \emph{GRID ONE} reste à compléter (CyberSec, BlueTeam, DevOps, EmbeddedSys, NetworkLab, HPC, Research) selon la méthodologie déjà éprouvée.
+    \item \textbf{Couverture de la bibliothèque OS métier.} Le rapport \acrshort{cubic} (annexe~\ref{annexe:iso}) couvre trois profils (dev, GUI, ML) ; la cible de dix images du projet \emph{GRIDONE} reste à compléter (CyberSec, BlueTeam, DevOps, EmbeddedSys, NetworkLab, HPC, Research) selon la méthodologie déjà éprouvée.
 \end{enumerate}
 
-\section*{Conclusion du chapitre}
 
 L'implémentation couvre les vingt-cinq modules Rust du démon, les dix-neuf modules Python du contrôleur, le \emph{launcher} d'invocation QEMU et le \emph{bridge} \texttt{LD\_PRELOAD}. L'intégration QEMU transparente, sans modification ni du noyau ni de QEMU, a été matérialisée par la chaîne \texttt{kvm-omega} $\to$ launcher $\to$ memfd agent $\to$ QEMU réel + bridge. Le harnais de tests à cinq niveaux (unitaires, protocole, intégration, sections \texttt{omega-lab.sh}, conformité/scalabilité) couvre les fonctionnalités du système jusqu'à 500~VM. Les benchmarks Criterion mesurés en local confirment que le démon n'est jamais le goulot d'étranglement face au réseau, et que la compression LZ4 atteint 6,6~Gio/s de débit. Les limitations sont assumées et les perspectives tracées : activation LZ4, prefetch, RDMA, Ceph systématique, intégration avec les équipes SIGMA et ORION.

@@ -4,11 +4,10 @@
 \chapter{Vue multi-agents du système}
 \label{chap:sma}
 
-\section*{Introduction du chapitre}
 
-Le présent rapport a été rédigé dans le cadre du cours de \emph{Systèmes Multi-Agents} (SMA) dispensé au Département de Génie Informatique de l'\acrshort{enspy}. À ce titre, la présentation strictement technique des chapitres adjacents (état de l'art au chapitre~\ref{chap:etat-art}, conception au chapitre~\ref{chap:conception}, implémentation au chapitre~\ref{chap:implementation}) doit être complétée par une \emph{lecture multi-agents} explicite du système. Cette lecture n'est pas un artifice rhétorique : le système \emph{omega-remote-paging} se prête naturellement à une description en termes d'agents coopérants car il est conçu, dès l'origine, comme un ensemble d'entités logicielles autonomes qui perçoivent leur environnement, agissent dessus et communiquent entre elles selon des protocoles formalisés.
+Le présent rapport a été rédigé dans le cadre du cours de \emph{Systèmes Multi-Agents} (SMA) dispensé au Département de Génie Informatique de l'\acrshort{enspy}. À ce titre, la présentation strictement technique des chapitres adjacents (état de l'art au chapitre~\ref{chap:etat-art}, conception au chapitre~\ref{chap:conception}, implémentation au chapitre~\ref{chap:implementation}) doit être complétée par une \emph{lecture multi-agents} explicite du système. Cette lecture n'est pas un artifice rhétorique : le système \emph{FusionCore} se prête naturellement à une description en termes d'agents coopérants car il est conçu, dès l'origine, comme un ensemble d'entités logicielles autonomes qui perçoivent leur environnement, agissent dessus et communiquent entre elles selon des protocoles formalisés.
 
-Ce chapitre poursuit trois objectifs. D'abord, rappeler les définitions et concepts fondamentaux de l'approche multi-agents que nous mobilisons (section~\ref{sec:sma-defs}). Ensuite, identifier et caractériser les agents qui constituent \emph{omega-remote-paging} (sections~\ref{sec:sma-recensement} à~\ref{sec:sma-sousagents}). Enfin, analyser leurs environnements, leurs interactions, leurs protocoles de communication, et discuter les propriétés émergentes du système ainsi formé (sections~\ref{sec:sma-env} à~\ref{sec:sma-emergence}).
+Ce chapitre poursuit trois objectifs. D'abord, rappeler les définitions et concepts fondamentaux de l'approche multi-agents que nous mobilisons (section~\ref{sec:sma-defs}). Ensuite, identifier et caractériser les agents qui constituent \emph{FusionCore} (sections~\ref{sec:sma-recensement} à~\ref{sec:sma-sousagents}). Enfin, analyser leurs environnements, leurs interactions, leurs protocoles de communication, et discuter les propriétés émergentes du système ainsi formé (sections~\ref{sec:sma-env} à~\ref{sec:sma-emergence}).
 
 % -----------------------------------------------------------------------------
 \section{Définitions et concepts fondamentaux mobilisés}
@@ -80,7 +79,7 @@ Trois patterns d'interaction structurent l'organisation des SMA :
 \end{itemize}
 
 % -----------------------------------------------------------------------------
-\section{Recensement des agents dans \emph{omega-remote-paging}}
+\section{Recensement des agents dans \emph{FusionCore}}
 \label{sec:sma-recensement}
 
 L'examen du dépôt \texttt{Omega\_FusionCore\_Proxmox-main/} permet d'identifier six types d'agents distincts, dont quatre principaux et deux familles de sous-agents internes. Le tableau~\ref{tab:agents-recensement} les recense.
@@ -100,7 +99,7 @@ Sous-agents internes      & Réactive             & 9 par démon          & Sche
 \texttt{omega-uffd-bridge}& Réactive             & 1 par VM             & Pont userfaultfd injecté dans QEMU \\
 \bottomrule
 \end{tabular}
-\caption{Recensement des agents de \emph{omega-remote-paging}.}
+\caption{Recensement des agents de \emph{FusionCore}.}
 \label{tab:agents-recensement}
 \end{table}
 
@@ -386,7 +385,7 @@ La figure~\ref{fig:sma-topology} représente la topologie d'interaction entre le
 \node[anchor=west, font=\scriptsize] at (-7, -4.0) {\textcolor{blue!70}{\textbf{---}} pair-à-pair (démons $\leftrightarrow$ démons, pages)};
 \node[anchor=west, font=\scriptsize] at (-7, -4.4) {\textit{intra-agent : via \texttt{NodeState} (tableau noir)}};
 \end{tikzpicture}
-\caption{Topologie d'interaction multi-agents de \emph{omega-remote-paging}.}
+\caption{Topologie d'interaction multi-agents de \emph{FusionCore}.}
 \label{fig:sma-topology}
 \end{figure}
 
@@ -606,8 +605,7 @@ La figure~\ref{fig:sma-synthese} synthétise la vue multi-agents du système : l
 \label{fig:sma-synthese}
 \end{figure}
 
-\section*{Conclusion du chapitre}
 
-Ce chapitre a montré que \emph{omega-remote-paging} se laisse naturellement décrire comme un système multi-agents au sens classique de Wooldridge et de Ferber. Six types d'agents y coexistent --- un contrôleur cognitif unique, des démons hybrides symétriques, un agent réactif autonome (\texttt{node-a-agent}), un service réactif pur (\texttt{node-bc-store}), un pont éphémère (\texttt{omega-uffd-bridge}), et neuf sous-agents internes par démon coordonnés par un tableau noir. Les quatre propriétés fondamentales (autonomie, réactivité, pro-activité, socialité) ont été vérifiées pour chaque agent principal. Quatre protocoles de communication structurent leurs interactions : un protocole binaire de 20 octets sur TLS pour le chemin chaud, une API HTTP REST pour la coordination cognitive, des canaux \texttt{mpsc} Tokio pour les sous-agents, et le passage de \emph{file descriptor} via \texttt{SCM\_RIGHTS} pour l'intégration QEMU. Les patterns de coopération mis en œuvre (leader-election par \texttt{flock}, coopération \emph{donor/borrower} sur les vCPU, réplication pour la tolérance aux pannes, hiérarchie souple contrôleur-démons, tableau noir intra-démon) sont des patterns SMA classiques. Enfin, le système manifeste plusieurs propriétés émergentes (auto-équilibrage cluster-wide, tolérance partielle aux pannes du contrôleur, auto-stabilisation par boucle adaptative, équilibrage statistique du store par hachage déterministe) qui valident a posteriori la pertinence de l'approche multi-agents.
+Ce chapitre a montré que \emph{FusionCore} se laisse naturellement décrire comme un système multi-agents au sens classique de Wooldridge et de Ferber. Six types d'agents y coexistent --- un contrôleur cognitif unique, des démons hybrides symétriques, un agent réactif autonome (\texttt{node-a-agent}), un service réactif pur (\texttt{node-bc-store}), un pont éphémère (\texttt{omega-uffd-bridge}), et neuf sous-agents internes par démon coordonnés par un tableau noir. Les quatre propriétés fondamentales (autonomie, réactivité, pro-activité, socialité) ont été vérifiées pour chaque agent principal. Quatre protocoles de communication structurent leurs interactions : un protocole binaire de 20 octets sur TLS pour le chemin chaud, une API HTTP REST pour la coordination cognitive, des canaux \texttt{mpsc} Tokio pour les sous-agents, et le passage de \emph{file descriptor} via \texttt{SCM\_RIGHTS} pour l'intégration QEMU. Les patterns de coopération mis en œuvre (leader-election par \texttt{flock}, coopération \emph{donor/borrower} sur les vCPU, réplication pour la tolérance aux pannes, hiérarchie souple contrôleur-démons, tableau noir intra-démon) sont des patterns SMA classiques. Enfin, le système manifeste plusieurs propriétés émergentes (auto-équilibrage cluster-wide, tolérance partielle aux pannes du contrôleur, auto-stabilisation par boucle adaptative, équilibrage statistique du store par hachage déterministe) qui valident a posteriori la pertinence de l'approche multi-agents.
 
 Le chapitre suivant entre dans la conception technique détaillée du système, en s'appuyant sur les rôles, responsabilités et interactions d'agents posés ici.

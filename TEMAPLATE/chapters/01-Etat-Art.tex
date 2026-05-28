@@ -4,9 +4,8 @@
 \chapter{Généralités et état de l'art}
 \label{chap:etat-art}
 
-\section*{Introduction du chapitre}
 
-L'objectif de ce chapitre est de doter le lecteur du socle technique indispensable à la compréhension des choix de conception et d'implémentation présentés dans les chapitres suivants. Quatre familles de techniques sous-tendent le système \emph{omega-remote-paging} : la virtualisation par hyperviseur de type~1, la gestion mémoire en espace utilisateur via \texttt{userfaultfd}, l'ordonnancement de ressources sous Linux moderne (cgroups~v2, PSI), et les modèles de partage de \acrshort{gpu}. Nous discutons également les travaux antérieurs sur la \emph{disaggregated memory} pour situer précisément la contribution du présent travail, puis concluons par une synthèse comparative qui justifie les choix retenus.
+L'objectif de ce chapitre est de doter le lecteur du socle technique indispensable à la compréhension des choix de conception et d'implémentation présentés dans les chapitres suivants. Quatre familles de techniques sous-tendent le système \emph{FusionCore} : la virtualisation par hyperviseur de type~1, la gestion mémoire en espace utilisateur via \texttt{userfaultfd}, l'ordonnancement de ressources sous Linux moderne (cgroups~v2, PSI), et les modèles de partage de \acrshort{gpu}. Nous discutons également les travaux antérieurs sur la \emph{disaggregated memory} pour situer précisément la contribution du présent travail, puis concluons par une synthèse comparative qui justifie les choix retenus.
 
 % -----------------------------------------------------------------------------
 \section{Virtualisation et clusters Proxmox~VE}
@@ -232,7 +231,7 @@ Le choix du nœud cible d'une migration --- ou plus généralement, du nœud d'a
     \item \textbf{Multi-critères pondéré}~\cite{gulati_2012_drs,verma_2015_borg} : agréger les signaux ci-dessus dans un score $S(n)$ pour chaque nœud, et choisir le maximum. C'est l'approche retenue par les orchestrateurs grand public (VMware DRS, Google Borg).
 \end{itemize}
 
-Notre score, exposé dans le chapitre~\ref{chap:conception}, combine les quatre critères : mémoire libre (50~\%), topologie (25~\%), charge CPU (15~\%) et nombre de migrations actives (10~\%). Cette pondération a été itérée empiriquement sur le cluster GRID~ZERO.
+Notre score, exposé dans le chapitre~\ref{chap:conception}, combine les quatre critères : mémoire libre (50~\%), topologie (25~\%), charge CPU (15~\%) et nombre de migrations actives (10~\%). Cette pondération a été itérée empiriquement sur le cluster GRIDZERO.
 
 % -----------------------------------------------------------------------------
 \section{Sécurité du canal et modèle de confiance}
@@ -246,13 +245,13 @@ Le canal inter-nœuds transporte des pages mémoire de \acrshort{vm}s : leur con
 
 L'usage d'une \emph{Public Key Infrastructure} (PKI) complète --- avec autorité de certification, signature et révocation --- serait disproportionné dans un cluster fermé de trois à dix nœuds. Nous adoptons le modèle \textbf{TOFU} (\emph{Trust On First Use}, popularisé par SSH) : à la première connexion entre deux nœuds, l'empreinte SHA-256 du certificat de la pair est enregistrée. Aux connexions suivantes, l'empreinte présentée est comparée à l'empreinte enregistrée ; toute divergence est traitée comme une attaque \emph{man-in-the-middle} et déclenche le rejet de la connexion.
 
-Le modèle TOFU est correct si la \emph{première} connexion se fait dans un environnement de confiance --- typiquement, lors du déploiement initial du cluster. Au sein de \emph{GRID ONE}, ce déploiement initial se fait par l'équipe ATLAS sur un VLAN management isolé.
+Le modèle TOFU est correct si la \emph{première} connexion se fait dans un environnement de confiance --- typiquement, lors du déploiement initial du cluster. Au sein de \emph{GRIDONE}, ce déploiement initial se fait par l'équipe ATLAS sur un VLAN management isolé.
 
 % -----------------------------------------------------------------------------
 \section{Synthèse comparative et positionnement}
 \label{sec:synthese-cmp}
 
-Le tableau~\ref{tab:cmp-proxmox-vs} récapitule, pour chacun des quatre verrous identifiés dans l'introduction, l'état natif de Proxmox~VE, les solutions alternatives existantes sur le marché, et le choix retenu par \emph{omega-remote-paging}.
+Le tableau~\ref{tab:cmp-proxmox-vs} récapitule, pour chacun des quatre verrous identifiés dans l'introduction, l'état natif de Proxmox~VE, les solutions alternatives existantes sur le marché, et le choix retenu par \emph{FusionCore}.
 
 \begin{table}[H]
 \centering
@@ -274,6 +273,5 @@ I/O à l'aveugle & Aucun arbitrage métier & Pas de standard cluster & Pondérat
 \label{tab:cmp-proxmox-vs}
 \end{table}
 
-\section*{Conclusion du chapitre}
 
 Le chapitre a balayé les briques techniques sur lesquelles s'appuie le système : virtualisation Proxmox/KVM/QEMU/QMP, modèle mémoire Linux et \texttt{userfaultfd}, cgroups~v2 et PSI, partage de GPU (VFIO, vGPU, DRM), migration live et politiques de placement, sécurité du canal par TLS+TOFU. Les travaux antérieurs sur la \emph{disaggregated memory} (Infiniswap, LegoOS, Carbink) ont été passés en revue et le positionnement de \emph{FusionCore} précisé : approche userspace pure, transport TCP/TLS, cible cluster Proxmox premier-citoyen. Le chapitre suivant entre dans la conception détaillée du système.
