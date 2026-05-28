@@ -23,10 +23,16 @@
 \usepackage{amssymb}
 \usepackage[french, ruled, vlined, linesnumbered]{algorithm2e}
 \usepackage{float}
+\usepackage{enumitem}
 \SetKwInput{KwData}{Données}
 \SetKwInput{KwResult}{Résultat}
 \SetKwFor{Try}{Try}{}{}
 \SetKwFor{Catch}{Catch}{}{}
+
+% Listes : forcer les puces (points) à tous les niveaux
+\setlist[itemize,1]{label=$\bullet$}
+\setlist[itemize,2]{label=$\circ$}
+\setlist[itemize,3]{label=$\diamond$}
 
 % ─── Environnements de type article scientifique ─────────────────────────────
 \theoremstyle{definition}
@@ -42,7 +48,7 @@
 % MÉTADONNÉES — À modifier pour votre projet
 % =============================================================================
 
-\FirstAuthor{Groupe Systèmes Distribués --- 4 GI}
+\FirstAuthor{Groupe Systèmes Distribués, 4 GI}
 \FirstAuthorNumber{ENSPY-4GI}
 
 \Supervisor{Pr. Batchakui}
@@ -106,7 +112,7 @@
 \newacronym{json}{JSON}{JavaScript Object Notation}
 \newacronym{http}{HTTP}{HyperText Transfer Protocol}
 \newacronym{tcp}{TCP}{Transmission Control Protocol}
-\newacronym{uffd}{UFFD}{userfaultfd --- file descriptor d'interception des défauts de page}
+\newacronym{uffd}{UFFD}{userfaultfd, file descriptor d'interception des défauts de page}
 \newacronym{vfio}{VFIO}{Virtual Function I/O}
 \newacronym{mdev}{mdev}{Mediated Device}
 \newacronym{numa}{NUMA}{Non-Uniform Memory Access}
@@ -324,7 +330,7 @@ Nos remerciements s'adressent en premier lieu au \textbf{Pr.~Batchakui}, notre e
 
 Nous remercions également l'ensemble de l'équipe pédagogique du Département de Génie Informatique de l'ENSPY pour le cadre de travail mis à notre disposition et la richesse des enseignements reçus tout au long du cycle d'ingénieur.
 
-Nos remerciements vont également aux ingénieurs porteurs du projet \emph{GRIDZERO} --- Ing.~Alain Mbo, Ing.~Abel Zogning et Ing.~Nassair Foupouagnigni --- pour le suivi régulier du projet, leurs regards sur l'état d'avancement, leurs conseils et leurs orientations tout au long de notre travail.
+Nos remerciements vont également aux ingénieurs porteurs du projet \emph{GRIDZERO}, Ing.~Alain Mbo, Ing.~Abel Zogning et Ing.~Nassair Foupouagnigni, pour le suivi régulier du projet, leurs regards sur l'état d'avancement, leurs conseils et leurs orientations tout au long de notre travail.
 
 \chapter*{Résumé}
 \addcontentsline{toc}{chapter}{Résumé}
@@ -417,10 +423,10 @@ The validation relies on automated tests, load scenarios and monitoring dashboar
 \endhead
 GRIDZERO    & Programme initial d'agrégation des machines existantes en cluster commun à l'ENSPY \\
 GRIDONE     & Continuité de GRIDZERO, structuration et élargissement de l'exploitation collective des ressources \\
-ATLAS       & Équipe \emph{IronGrid} --- infrastructure physique du cluster et supervision \\
-OMEGA       & Équipe \emph{FusionCore} --- mutualisation des ressources et bibliothèque d'images \\
-SIGMA       & Équipe \emph{Horizon} --- portail web de réservation des machines virtuelles \\
-ORION       & Équipe \emph{Parallax} --- calcul distribué et frameworks de parallélisation \\
+ATLAS       & Équipe \emph{IronGrid}, infrastructure physique du cluster et supervision \\
+OMEGA       & Équipe \emph{FusionCore}, mutualisation des ressources et bibliothèque d'images \\
+SIGMA       & Équipe \emph{Horizon}, portail web de réservation des machines virtuelles \\
+ORION       & Équipe \emph{Parallax}, calcul distribué et frameworks de parallélisation \\
 FusionCore  & Système conçu et implémenté par l'équipe OMEGA, objet du présent rapport \\
 BDI         & Belief--Desire--Intention (architecture cognitive d'agent) \\
 FIPA        & Foundation for Intelligent Physical Agents (norme de communication agents) \\

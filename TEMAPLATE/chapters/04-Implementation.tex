@@ -81,7 +81,7 @@ Le dépôt \texttt{Omega\_FusionCore\_Proxmox-main/} est organisé en \emph{work
 \texttt{node-a-agent}            & Agent userfaultfd standalone, alternative légère sans contrôleur \\
 \texttt{node-bc-store}           & Store distant (RAM ou Ceph RADOS), nettoyage orphelins, TLS \\
 \texttt{omega-gpu-proxy}         & Proxy GPU applicatif VM $\rightarrow$ nœud GPU \\
-\texttt{omega-qemu-launcher}     & Wrapper QEMU --- injecte le \texttt{memory-backend} au démarrage \\
+\texttt{omega-qemu-launcher}     & Wrapper QEMU, injecte le \texttt{memory-backend} au démarrage \\
 \bottomrule
 \end{tabular}
 \caption{Composition du workspace Rust.}
@@ -396,14 +396,14 @@ Les benchmarks complémentaires sur l'algorithme CLOCK (crate \texttt{node-a-age
 
 \textbf{Lectures} :
 \begin{itemize}[leftmargin=*]
-    \item Le coût d'insertion d'une page (\texttt{store/put\_4k}) est dominé par le clonage du buffer 4~Kio (\texttt{Box<[u8]>}) et l'insertion dans le shard cible de la \texttt{DashMap}. À 1,36~µs par insertion, le débit théorique mono-thread est de l'ordre de 2,9~Gio/s --- bien au-dessus du débit GbE attendu de 0,1~Gio/s, donc le store n'est pas le goulot d'étranglement.
+    \item Le coût d'insertion d'une page (\texttt{store/put\_4k}) est dominé par le clonage du buffer 4~Kio (\texttt{Box<[u8]>}) et l'insertion dans le shard cible de la \texttt{DashMap}. À 1,36~µs par insertion, le débit théorique mono-thread est de l'ordre de 2,9~Gio/s, bien au-dessus du débit GbE attendu de 0,1~Gio/s, donc le store n'est pas le goulot d'étranglement.
     \item La lecture \texttt{store/get\_hit} à 207~ns est dominée par le hash, le clonage du buffer et la mise à jour du timestamp LRU.
     \item Le \texttt{store/get\_miss} à 44~ns confirme que le hashing seul est négligeable.
     \item La sérialisation d'une trame complète (en-tête + 4~Kio) à 400~ns indique que la sérialisation n'est pas un poste de coût significatif face au transport réseau.
     \item La compression LZ4 d'une page atteint 6,3 à 6,6~Gio/s, soit l'équivalent d'environ 1,5~Mpages/s. Activer la compression coûte 175~ns par page mais peut diviser par dix la taille des pages \emph{zero-filled} ou textuelles, ce qui est largement rentable sur un canal GbE.
     \item Le débit du \emph{batch} converge vers ~6,9~Gio/s à 32 pages : amortir un RTT sur N pages divise sa contribution par N.
     \item L'algorithme CLOCK affiche un coût quasi-constant de 65~ns par page scrutée, indépendamment de la taille de la roue (de 64 à 4096 pages). Cette propriété confirme la pertinence du choix de CLOCK face à LRU strict pour notre charge.
-    \item Le bench \texttt{clock/mark\_present\_concurrent\_4threads} (278~µs pour 4 fils en contention) atteste de la viabilité de la structure sous accès concurrent --- ce qui est nécessaire car le \texttt{vm\_tracker} est interrogé en parallèle par le handler \texttt{userfaultfd} et par le moteur d'éviction.
+    \item Le bench \texttt{clock/mark\_present\_concurrent\_4threads} (278~µs pour 4 fils en contention) atteste de la viabilité de la structure sous accès concurrent, ce qui est nécessaire car le \texttt{vm\_tracker} est interrogé en parallèle par le handler \texttt{userfaultfd} et par le moteur d'éviction.
 \end{itemize}
 
 \subsection{Latences cluster cibles et méthodologie}
@@ -518,7 +518,7 @@ Le système, par choix de conception, ne traite pas certains cas. Ces limitation
 Plusieurs axes d'évolution se dessinent à partir de l'état actuel du système :
 
 \begin{enumerate}[leftmargin=*]
-    \item \textbf{Activation conditionnelle de la compression LZ4.} Les benchmarks Criterion montrent un coût négligeable de la compression face à son bénéfice réseau ; l'activation par défaut --- avec opt-out par variable d'environnement --- est une amélioration immédiate.
+    \item \textbf{Activation conditionnelle de la compression LZ4.} Les benchmarks Criterion montrent un coût négligeable de la compression face à son bénéfice réseau ; l'activation par défaut, avec opt-out par variable d'environnement, est une amélioration immédiate.
     \item \textbf{Prefetch des pages adjacentes.} Le bit \texttt{0x02} du champ \texttt{flags} est réservé dans le protocole pour un prefetch hint. L'implémentation consisterait à fetcher les pages \([p, p+k)\) en parallèle de la page demandée \(p\), où \(k\) est calibré par observation.
     \item \textbf{Support RDMA (RoCE ou Infiniband).} Pour les clusters équipés, un backend de transport RDMA réduirait la latence de \texttt{GET\_PAGE} d'environ un ordre de grandeur. L'architecture en \emph{trait Transport} du démon facilite cette évolution.
     \item \textbf{Backend Ceph systématique pour les stores.} La couche \texttt{CephStore} est implémentée et activée par détection (\texttt{librados} + \texttt{/etc/ceph/ceph.conf}). Sur le cluster \emph{GRIDZERO} qui dispose déjà de Ceph, son activation systématique simplifierait l'opération (les pages survivent à un redémarrage de démon).

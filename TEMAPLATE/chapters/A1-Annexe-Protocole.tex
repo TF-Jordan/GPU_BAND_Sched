@@ -17,7 +17,7 @@ Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~
 \toprule
 \textbf{Offset} & \textbf{Taille} & \textbf{Champ} & \textbf{Description} \\
 \midrule
-0  & 2 & \texttt{magic}        & \texttt{0x524D} (\og{}RM\fg{} --- Remote Memory) --- identifiant du protocole \\
+0  & 2 & \texttt{magic}        & \texttt{0x524D} (\og{}RM\fg{}, Remote Memory), identifiant du protocole \\
 2  & 1 & \texttt{opcode}       & Type de message (voir tableau~\ref{tab:opcodes-req} et \ref{tab:opcodes-rsp}) \\
 3  & 1 & \texttt{flags}        & Bit~0 (\texttt{0x01}) : page compressée LZ4 ; bits 1--7 réservés \\
 4  & 4 & \texttt{vm\_id}       & Identifiant de la VM (\texttt{u32} BE) \\
@@ -50,12 +50,12 @@ Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~
 \toprule
 \textbf{Opcode} & \textbf{Valeur} & \textbf{Payload requête} & \textbf{Description} \\
 \midrule
-\texttt{PING}            & \texttt{0x01} & ---             & Vérification de connectivité \\
+\texttt{PING}            & \texttt{0x01} &,             & Vérification de connectivité \\
 \texttt{PUT\_PAGE}       & \texttt{0x10} & 4096 octets     & Stocke une page (vm\_id, page\_id) $\to$ data \\
-\texttt{GET\_PAGE}       & \texttt{0x11} & ---             & Récupère la page (vm\_id, page\_id) \\
-\texttt{DELETE\_PAGE}    & \texttt{0x12} & ---             & Supprime la page (vm\_id, page\_id) \\
+\texttt{GET\_PAGE}       & \texttt{0x11} &,             & Récupère la page (vm\_id, page\_id) \\
+\texttt{DELETE\_PAGE}    & \texttt{0x12} &,             & Supprime la page (vm\_id, page\_id) \\
 \texttt{BATCH\_PUT\_PAGE}& \texttt{0x13} & $N \times$ (u64 + 4096) & Stocke N pages d'une même VM \\
-\texttt{STATS\_REQUEST}  & \texttt{0x20} & ---             & Demande des statistiques du store \\
+\texttt{STATS\_REQUEST}  & \texttt{0x20} &,             & Demande des statistiques du store \\
 \bottomrule
 \end{tabular}
 \caption{Opcodes de requête.}
@@ -71,12 +71,12 @@ Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~
 \toprule
 \textbf{Opcode} & \textbf{Valeur} & \textbf{Payload} & \textbf{Description} \\
 \midrule
-\texttt{PONG}            & \texttt{0x02} & ---             & Réponse à PING \\
+\texttt{PONG}            & \texttt{0x02} &,             & Réponse à PING \\
 \texttt{STATS\_RESPONSE} & \texttt{0x21} & JSON UTF-8      & Statistiques du store \\
 \texttt{OK}              & \texttt{0x80} & variable        & Opération réussie (+ données si GET) \\
-\texttt{NOT\_FOUND}      & \texttt{0x81} & ---             & Page absente du store \\
+\texttt{NOT\_FOUND}      & \texttt{0x81} &,             & Page absente du store \\
 \texttt{ERROR}           & \texttt{0x82} & message UTF-8   & Erreur (message texte dans payload) \\
-\texttt{BATCH\_PUT\_OK}  & \texttt{0x83} & ---             & \texttt{page\_id} = \texttt{(failed $\ll$ 32) | stored} \\
+\texttt{BATCH\_PUT\_OK}  & \texttt{0x83} &,             & \texttt{page\_id} = \texttt{(failed $\ll$ 32) | stored} \\
 \bottomrule
 \end{tabular}
 \caption{Opcodes de réponse.}

@@ -103,10 +103,10 @@ cgroup \texttt{io.stat}       & \texttt{rbytes}, \texttt{wbytes}, \texttt{rios},
 \toprule
 \textbf{\texttt{some.avg10}} & \textbf{Interprétation} \\
 \midrule
-0--1\%       & Aucune pression --- état nominal \\
-1--10\%      & Pression modérée --- surveiller \\
-$>$ 10\%     & Pression élevée --- activer remote paging \\
-$>$ 20\%     & Pression critique --- envisager migration \\
+0--1\%       & Aucune pression, état nominal \\
+1--10\%      & Pression modérée, surveiller \\
+$>$ 10\%     & Pression élevée, activer remote paging \\
+$>$ 20\%     & Pression critique, envisager migration \\
 \bottomrule
 \end{tabular}
 \caption{Seuils d'interprétation PSI mémoire (some.avg10).}

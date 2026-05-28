@@ -44,7 +44,7 @@ Chaque \acrshort{vm} possède un identifiant numérique unique (\texttt{vmid}) e
 
 \subsection{Stockage partagé : Ceph et RBD}
 
-Le \textbf{stockage partagé} est une condition nécessaire à la migration efficace d'une \acrshort{vm} : si le disque ne peut être atteint que depuis le nœud source, alors toute migration entraîne le transfert de tout le contenu du disque (souvent plusieurs dizaines de giga-octets) en plus de la mémoire vive. Avec un système de fichiers distribué comme \emph{Ceph}~\cite{ceph_doc}, le disque virtuel d'une \acrshort{vm} (image RBD --- \acrshort{rbd}) est visible depuis n'importe quel nœud sans transfert préalable.
+Le \textbf{stockage partagé} est une condition nécessaire à la migration efficace d'une \acrshort{vm} : si le disque ne peut être atteint que depuis le nœud source, alors toute migration entraîne le transfert de tout le contenu du disque (souvent plusieurs dizaines de giga-octets) en plus de la mémoire vive. Avec un système de fichiers distribué comme \emph{Ceph}~\cite{ceph_doc}, le disque virtuel d'une \acrshort{vm} (image RBD, \acrshort{rbd}) est visible depuis n'importe quel nœud sans transfert préalable.
 
 Ceph organise les données en \emph{objets} de quelques mégaoctets répliqués (facteur 2 ou 3) sur des disques \emph{OSD} (\emph{Object Storage Daemon}) répartis sur l'ensemble des nœuds. La cohérence est assurée par l'algorithme CRUSH qui calcule de manière déterministe la localisation des objets en fonction d'une carte du cluster, sans annuaire centralisé. Pour notre système, l'hypothèse Ceph permet d'affirmer que \og{}seule la mémoire vive est transférée lors d'une migration\fg{} : les disques sont déjà partagés et accessibles depuis le nœud cible.
 
@@ -82,7 +82,7 @@ Le processus qui veut intercepter les défauts ouvre un \emph{file descriptor} \
 
 Depuis Linux~5.11 (2021), l'option \texttt{vm.unprivileged\_userfaultfd=1} permet aux processus non-root de créer un \texttt{userfaultfd} ; auparavant, seul \texttt{root} y avait accès. Notre démon ayant des privilèges étendus (lecture de \texttt{/proc/meminfo}, écriture sur les sockets QMP, invocation de \texttt{qm migrate}), cette restriction ne nous affecte pas directement, mais l'option doit être activée pour le \emph{bridge} \texttt{LD\_PRELOAD} injecté dans le processus QEMU lui-même.
 
-\textbf{Limitations}. \texttt{userfaultfd} ne couvre que les \emph{anonymous mappings} (mémoire allouée par \texttt{mmap(MAP\_ANONYMOUS)}) et les \emph{shmem} (mémoire partagée tmpfs). Pour QEMU, cela impose que la mémoire \emph{guest} soit allouée via un \texttt{memory-backend-memfd} ou un \texttt{memory-backend-file} en \emph{shmem} --- ce qui justifie la transformation opérée par notre \texttt{omega-qemu-launcher} (cf.~chapitre~\ref{chap:implementation}).
+\textbf{Limitations}. \texttt{userfaultfd} ne couvre que les \emph{anonymous mappings} (mémoire allouée par \texttt{mmap(MAP\_ANONYMOUS)}) et les \emph{shmem} (mémoire partagée tmpfs). Pour QEMU, cela impose que la mémoire \emph{guest} soit allouée via un \texttt{memory-backend-memfd} ou un \texttt{memory-backend-file} en \emph{shmem}, ce qui justifie la transformation opérée par notre \texttt{omega-qemu-launcher} (cf.~chapitre~\ref{chap:implementation}).
 
 \subsection{Algorithmes de remplacement de pages}
 
@@ -192,7 +192,7 @@ Pour les \acrshort{gpu}s grand public, ces voies sont fermées. Le partage doit 
 
 Le sous-système \textbf{DRM} (\emph{Direct Rendering Manager}) est l'interface noyau de pilotage des \acrshort{gpu}s sous Linux. Depuis Linux~3.12, DRM expose des \emph{render nodes} sous \texttt{/dev/dri/renderD*} qui permettent une utilisation \emph{compute} du \acrshort{gpu} (calcul OpenCL, encodage vidéo, rendu off-screen) sans exiger les droits d'accès aux modes graphiques. C'est sur ces \emph{render nodes} que notre démon ouvre une connexion pour interroger les capacités du \acrshort{gpu} (mémoire vidéo totale, type de pilote, identifiants matériels) via les \texttt{ioctl} \texttt{DRM\_IOCTL\_VERSION} et \texttt{DRM\_IOCTL\_GEM\_*}.
 
-\textbf{virtio-gpu} est le pilote \emph{guest} virtio qui présente un \acrshort{gpu} virtuel à la \acrshort{vm}. Couplé à \textbf{virgl} (renderer côté hôte), il permet à une \acrshort{vm} d'exécuter des appels OpenGL qui sont retransmis à un \acrshort{gpu} physique du nœud. Cette pile fournit le chemin de virtualisation \emph{léger} qui complète --- et concurrence dans certains cas --- le passthrough VFIO. Notre \texttt{gpu\_virgl\_bridge.rs} consolide ce chemin pour multiplexer plusieurs \acrshort{vm}s consommatrices virgl.
+\textbf{virtio-gpu} est le pilote \emph{guest} virtio qui présente un \acrshort{gpu} virtuel à la \acrshort{vm}. Couplé à \textbf{virgl} (renderer côté hôte), il permet à une \acrshort{vm} d'exécuter des appels OpenGL qui sont retransmis à un \acrshort{gpu} physique du nœud. Cette pile fournit le chemin de virtualisation \emph{léger} qui complète, et concurrence dans certains cas, le passthrough VFIO. Notre \texttt{gpu\_virgl\_bridge.rs} consolide ce chemin pour multiplexer plusieurs \acrshort{vm}s consommatrices virgl.
 
 \subsection{Reset GPU et leader-election}
 
@@ -222,7 +222,7 @@ Proxmox encapsule ces deux modes sous une commande unique : \texttt{qm migrate <
 
 \subsection{Politiques de placement}
 
-Le choix du nœud cible d'une migration --- ou plus généralement, du nœud d'admission d'une nouvelle \acrshort{vm} --- est gouverné par une \emph{politique de placement}. Les familles classiques sont :
+Le choix du nœud cible d'une migration, ou plus généralement, du nœud d'admission d'une nouvelle \acrshort{vm}, est gouverné par une \emph{politique de placement}. Les familles classiques sont :
 
 \begin{itemize}[leftmargin=*]
     \item \textbf{Bin-packing} : tasser les \acrshort{vm}s sur le minimum de nœuds pour permettre d'éteindre les nœuds vides. Optimal énergétiquement, mais désastreux en cas de pic de charge soudain.
@@ -243,9 +243,9 @@ Le canal inter-nœuds transporte des pages mémoire de \acrshort{vm}s : leur con
 
 \subsection{TOFU : \emph{Trust On First Use}}
 
-L'usage d'une \emph{Public Key Infrastructure} (PKI) complète --- avec autorité de certification, signature et révocation --- serait disproportionné dans un cluster fermé de trois à dix nœuds. Nous adoptons le modèle \textbf{TOFU} (\emph{Trust On First Use}, popularisé par SSH) : à la première connexion entre deux nœuds, l'empreinte SHA-256 du certificat de la pair est enregistrée. Aux connexions suivantes, l'empreinte présentée est comparée à l'empreinte enregistrée ; toute divergence est traitée comme une attaque \emph{man-in-the-middle} et déclenche le rejet de la connexion.
+L'usage d'une \emph{Public Key Infrastructure} (PKI) complète, avec autorité de certification, signature et révocation, serait disproportionné dans un cluster fermé de trois à dix nœuds. Nous adoptons le modèle \textbf{TOFU} (\emph{Trust On First Use}, popularisé par SSH) : à la première connexion entre deux nœuds, l'empreinte SHA-256 du certificat de la pair est enregistrée. Aux connexions suivantes, l'empreinte présentée est comparée à l'empreinte enregistrée ; toute divergence est traitée comme une attaque \emph{man-in-the-middle} et déclenche le rejet de la connexion.
 
-Le modèle TOFU est correct si la \emph{première} connexion se fait dans un environnement de confiance --- typiquement, lors du déploiement initial du cluster. Au sein de \emph{GRIDONE}, ce déploiement initial se fait par l'équipe ATLAS sur un VLAN management isolé.
+Le modèle TOFU est correct si la \emph{première} connexion se fait dans un environnement de confiance, typiquement, lors du déploiement initial du cluster. Au sein de \emph{GRIDONE}, ce déploiement initial se fait par l'équipe ATLAS sur un VLAN management isolé.
 
 % -----------------------------------------------------------------------------
 \section{Synthèse comparative et positionnement}

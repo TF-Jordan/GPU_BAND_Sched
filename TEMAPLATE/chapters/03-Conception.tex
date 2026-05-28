@@ -5,7 +5,7 @@
 \label{chap:conception}
 
 
-Le chapitre précédent a établi le vocabulaire technique et positionné notre approche dans le paysage de la mémoire distante et de l'orchestration cluster. Ce chapitre expose la conception du système \emph{FusionCore} : la démarche d'ingénierie suivie, l'analyse fine des besoins, l'architecture globale du système, puis la conception détaillée de chacun des quatre piliers techniques --- paging distant, élasticité multidimensionnelle, multiplexage \acrshort{gpu}, migration automatique. La structuration adopte un découpage \emph{verrou par verrou} : à chaque verrou identifié dans l'introduction du rapport correspond une section de conception, qui sera suivie au chapitre~\ref{chap:implementation} d'une section d'implémentation symétrique.
+Le chapitre précédent a établi le vocabulaire technique et positionné notre approche dans le paysage de la mémoire distante et de l'orchestration cluster. Ce chapitre expose la conception du système \emph{FusionCore} : la démarche d'ingénierie suivie, l'analyse fine des besoins, l'architecture globale du système, puis la conception détaillée de chacun des quatre piliers techniques, paging distant, élasticité multidimensionnelle, multiplexage \acrshort{gpu}, migration automatique. La structuration adopte un découpage \emph{verrou par verrou} : à chaque verrou identifié dans l'introduction du rapport correspond une section de conception, qui sera suivie au chapitre~\ref{chap:implementation} d'une section d'implémentation symétrique.
 
 % -----------------------------------------------------------------------------
 \section{Démarche d'ingénierie}
@@ -144,7 +144,7 @@ La figure~\ref{fig:usecase} décrit le diagramme des cas d'usage. Quatre acteurs
 
 Le système se structure en deux couches logiques distinctes mais coopératives. La première est composée d'un \emph{démon symétrique} (\texttt{omega-daemon}) déployé identiquement sur chaque nœud du cluster, jouant simultanément deux rôles : (i) \emph{compute}, c'est-à-dire surveillance des \acrshort{vm}s locales, interception des défauts de page, éviction vers les pairs ; (ii) \emph{store}, c'est-à-dire réception, stockage et restitution des pages envoyées par les pairs. Cette symétrie est centrale : elle élimine la distinction \og{}nœud frontal\fg{} vs \og{}nœud arrière\fg{} qui existerait dans une architecture maître-esclave classique, et elle simplifie radicalement le déploiement (un seul binaire à pousser sur tous les nœuds).
 
-La seconde couche est un \emph{contrôleur singleton} (\texttt{omega-controller}) tournant sur un seul nœud du cluster. Ce contrôleur héberge la vue \emph{cluster-wide} : il interroge périodiquement chaque démon via l'API HTTP \texttt{/control/status} (port 9200), agrège les informations, applique la politique de migration et la politique d'admission. Lorsque le contrôleur décide d'une action (migrer la \acrshort{vm}~$V$ du nœud~$A$ vers le nœud~$B$), il la communique au démon source via \texttt{POST /control/migrate} (port 9300). Le choix d'un singleton --- plutôt qu'un consensus distribué --- est motivé par la simplicité opérationnelle et par le fait que la perte transitoire du contrôleur \emph{n'interrompt pas le service} : les démons continuent d'évincer, de servir les défauts et de répondre aux requêtes existantes ; seules les décisions cluster-wide nouvelles (admission, migration) sont retardées.
+La seconde couche est un \emph{contrôleur singleton} (\texttt{omega-controller}) tournant sur un seul nœud du cluster. Ce contrôleur héberge la vue \emph{cluster-wide} : il interroge périodiquement chaque démon via l'API HTTP \texttt{/control/status} (port 9200), agrège les informations, applique la politique de migration et la politique d'admission. Lorsque le contrôleur décide d'une action (migrer la \acrshort{vm}~$V$ du nœud~$A$ vers le nœud~$B$), il la communique au démon source via \texttt{POST /control/migrate} (port 9300). Le choix d'un singleton, plutôt qu'un consensus distribué, est motivé par la simplicité opérationnelle et par le fait que la perte transitoire du contrôleur \emph{n'interrompt pas le service} : les démons continuent d'évincer, de servir les défauts et de répondre aux requêtes existantes ; seules les décisions cluster-wide nouvelles (admission, migration) sont retardées.
 
 \begin{figure}[H]
 \centering
@@ -169,7 +169,7 @@ La seconde couche est un \emph{contrôleur singleton} (\texttt{omega-controller}
 \draw[<->, thick, blue!70] (db.south) ..controls (2.3,-0.5).. (dc.south);
 \draw[<->, thick, blue!70] (da.south) ..controls (0,-1.5)..  (dc.south);
 % Contrôleur
-\node[ctrl] (c) at (0, -3.0) {\textbf{omega-controller} (Python --- sur un nœud)\\[1pt] {\footnotesize MigrationPolicy · AdmissionEngine · CgroupCpuMonitor · TopologyPlacement · ResilientCollector}};
+\node[ctrl] (c) at (0, -3.0) {\textbf{omega-controller} (Python, sur un nœud)\\[1pt] {\footnotesize MigrationPolicy · AdmissionEngine · CgroupCpuMonitor · TopologyPlacement · ResilientCollector}};
 % Liens contrôleur ↔ démons
 \draw[<->, dashed, red!70] (da.south) ..controls (-4.6,-2)..(c.north) node[pos=0.5, left, font=\tiny] {HTTP :9200/9300};
 \draw[<->, dashed, red!70] (db.south) -- (c.north);
@@ -276,7 +276,7 @@ La figure~\ref{fig:arch-deploiement} représente le déploiement type sur un clu
 \node[cmp] at (4.5, 1.65) {omega-controller};
 
 % Ceph
-\node[ceph] at (0, -0.2) {Réseau de stockage Ceph (10/25 Gb/s SFP+) --- pool RBD répliqué};
+\node[ceph] at (0, -0.2) {Réseau de stockage Ceph (10/25 Gb/s SFP+), pool RBD répliqué};
 
 % Liens TLS 9100
 \foreach \src/\dst in {-4.5/-1.5, -1.5/1.5, 1.5/4.5, -4.5/4.5, -4.5/1.5, -1.5/4.5} {
@@ -588,7 +588,7 @@ La sérialisation par une \emph{file de priorité unique globale} (\texttt{Binar
 Le format binaire \texttt{GpuHeader} sur la socket comporte : magic \texttt{0x4F4D4750} (\og{}OMGP\fg{}), version, \texttt{vm\_id}, numéro de séquence, \texttt{payload\_len}, priorité (22 octets en-tête + payload). L'algorithme~\ref{algo:gpu} résume la boucle d'arbitrage.
 
 \begin{algorithm}[H]
-\caption{Multiplexeur GPU --- boucle d'arbitrage}
+\caption{Multiplexeur GPU, boucle d'arbitrage}
 \label{algo:gpu}
 \KwData{Heap $H$ ; budgets \texttt{vram\_budget}, \texttt{vram\_used} par VM ; backend DRM}
 \While{le démon est actif}{
