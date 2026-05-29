@@ -13,6 +13,7 @@ Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~
 \begin{table}[H]
 \centering
 \small
+\caption{Format d'en-tête du protocole inter-nœuds.}
 \begin{tabular}{rrlp{7cm}}
 \toprule
 \textbf{Offset} & \textbf{Taille} & \textbf{Champ} & \textbf{Description} \\
@@ -26,7 +27,7 @@ Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~
 20 & * & \texttt{payload}      & Données (page, message d'erreur ou JSON) \\
 \bottomrule
 \end{tabular}
-\caption{Format d'en-tête du protocole inter-nœuds.}
+
 \end{table}
 
 \section{Contraintes}
@@ -46,6 +47,7 @@ Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~
 \begin{table}[H]
 \centering
 \small
+\caption{Opcodes de requête.}
 \begin{tabular}{lrlp{7cm}}
 \toprule
 \textbf{Opcode} & \textbf{Valeur} & \textbf{Payload requête} & \textbf{Description} \\
@@ -58,7 +60,7 @@ Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~
 \texttt{STATS\_REQUEST}  & \texttt{0x20} &,             & Demande des statistiques du store \\
 \bottomrule
 \end{tabular}
-\caption{Opcodes de requête.}
+
 \label{tab:opcodes-req}
 \end{table}
 
@@ -67,6 +69,7 @@ Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~
 \begin{table}[H]
 \centering
 \small
+\caption{Opcodes de réponse.}
 \begin{tabular}{lrlp{7cm}}
 \toprule
 \textbf{Opcode} & \textbf{Valeur} & \textbf{Payload} & \textbf{Description} \\
@@ -79,7 +82,7 @@ Toutes les trames (requête comme réponse) partagent un en-tête de \textbf{20~
 \texttt{BATCH\_PUT\_OK}  & \texttt{0x83} &,             & \texttt{page\_id} = \texttt{(failed $\ll$ 32) | stored} \\
 \bottomrule
 \end{tabular}
-\caption{Opcodes de réponse.}
+
 \label{tab:opcodes-rsp}
 \end{table}
 

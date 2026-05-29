@@ -18,7 +18,7 @@ La conception s'inscrit dans un cycle itératif à trois étages, suivant une d�
 \begin{enumerate}[leftmargin=*]
     \item \textbf{Développement et tests unitaires sur poste de dev.} Chaque module Rust est développé avec sa suite de tests \texttt{\#[cfg(test)]} exécutée à chaque modification. Les hypothèses externes (fichier \texttt{/proc/meminfo}, cgroup, sysfs) sont mockées par des structures Rust en mémoire.
     \item \textbf{Lab KVM mono-machine simulant trois nœuds.} Trois instances du démon et un store local sont lancés sur la même machine avec des numéros de ports distincts. Cette étape valide les interactions multi-processus, le protocole binaire, la sérialisation TLS, le \emph{circuit breaker} du collecteur.
-    \item \textbf{Cluster Proxmox réel (\emph{GRIDZERO}).} Validation finale sur le cluster physique fourni par ATLAS (4~nœuds, 128~Gio de RAM ECC chacun, Ceph répliqué). Les scénarios \emph{omega-lab.sh} sont exécutés en boucle complète pendant des sessions de plusieurs heures.
+    \item \textbf{Cluster Proxmox réel (\emph{GRIDZERO}).} Validation finale sur le cluster physique fourni par nos chers encadreurs (3~nœuds, Ceph répliqué). Les scénarios \emph{omega-lab.sh} sont exécutés en boucle complète pendant des sessions de plusieurs heures.
 \end{enumerate}
 
 \subsection{Contraintes auto-imposées}
@@ -27,8 +27,8 @@ Trois contraintes structurent l'ensemble des choix de conception :
 
 \begin{itemize}[leftmargin=*]
     \item \textbf{Userspace strict, pas de patch kernel.} Le système n'introduit aucune modification au noyau Linux ni à QEMU. Tous les hooks reposent sur des interfaces stables : \texttt{userfaultfd}, cgroups~v2, PSI, QMP, sysfs DRM.
-    \item \textbf{Invariants vérifiables et appliqués.} Chaque garantie offerte par le système (quota mémoire, leader-election GPU, exclusivité du démon par nœud) est encodée comme un \emph{invariant} vérifié à chaque opération critique, et non simplement documenté.
-    \item \textbf{Observabilité par défaut.} Tout chemin chaud expose un compteur Prometheus ; toute décision de placement, migration ou éviction est journalisée en \texttt{structlog} avec son contexte complet.
+    \item \textbf{Invariants vérifiables et appliqués.} Chaque garantie offerte par le système (quota mémoire, leader-election GPU, exclusivité du démon par nœud) est encodée comme un \emph{invariant} vérifié à chaque opération critique.
+    \item \textbf{Observabilité par défaut.} Tout chemin chaud (critique) expose un compteur Prometheus ; toute décision de placement, migration ou éviction est journalisée en \texttt{structlog} avec son contexte complet.
 \end{itemize}
 
 \subsection{Critères non-fonctionnels mesurables}
@@ -38,6 +38,7 @@ Les critères non-fonctionnels chiffrés que la conception doit satisfaire sont 
 \begin{table}[H]
 \centering
 \small
+\caption{Critères non-fonctionnels du système \emph{FusionCore}
 \begin{tabular}{p{4.5cm}p{2.5cm}p{6.5cm}}
 \toprule
 \textbf{Critère} & \textbf{Cible} & \textbf{Mode de vérification} \\
@@ -50,7 +51,7 @@ Conformité de 30~VM simultanées      & 100\%          & Test \texttt{30-vm-con
 Soak 500~VM, 1\,heure                & Stabilité      & Test \texttt{31-scale-vms} \\
 \bottomrule
 \end{tabular}
-\caption{Critères non-fonctionnels du système \emph{FusionCore}.}
+.}
 \label{tab:nfr}
 \end{table}
 
@@ -60,7 +61,7 @@ Soak 500~VM, 1\,heure                & Stabilité      & Test \texttt{31-scale-v
 
 \subsection{Besoins fonctionnels}
 
-Les besoins fonctionnels (BF) sont dérivés directement de la mission OMEGA telle que définie dans le projet \emph{GRIDONE} et de la spécification produit consignée dans le dépôt \texttt{Omega\_FusionCore\_Proxmox-main}.
+Les besoins fonctionnels (BF) sont dérivés directement de la mission OMEGA telle que définie dans le projet \emph{GRIDONE}.
 
 \begin{description}[leftmargin=2.2cm,style=nextline]
     \item[BF-01.] Permettre l'admission d'une \acrshort{vm} dont la RAM demandée dépasse la RAM libre du nœud cible, en mutualisant la RAM des autres nœuds du cluster.
@@ -82,7 +83,7 @@ Les besoins fonctionnels (BF) sont dérivés directement de la mission OMEGA tel
     \item[BNF-03. Observabilité.] Exposer un endpoint Prometheus standard sur \texttt{/control/metrics}, journaliser toutes les décisions critiques.
     \item[BNF-04. Maintenabilité.] Conserver une dépendance \emph{kernel modifié} = $\emptyset$ ; conserver une dépendance \emph{QEMU forké} = $\emptyset$.
     \item[BNF-05. Performance.] Respecter les cibles de latence et débit du tableau~\ref{tab:nfr}.
-    \item[BNF-06. Scalabilité.] Soutenir jusqu'à 500~\acrshort{vm}s actives sur un cluster de quatre nœuds.
+    \item[BNF-06. Scalabilité.] Soutenir jusqu'à 500~\acrshort{vm}s actives sur un cluster de trois nœuds.
 \end{description}
 
 \subsection{Acteurs et cas d'usage}
@@ -254,7 +255,7 @@ La figure~\ref{fig:arch-composants} détaille les composants internes du démon 
 
 \subsection{Diagramme de déploiement}
 
-La figure~\ref{fig:arch-deploiement} représente le déploiement type sur un cluster Proxmox de quatre nœuds avec Ceph répliqué, conforme à la photographie matérielle de \emph{GRIDZERO}. Les VLANs sont séparés : management (1~Gb/s, RJ45), stockage Ceph (10/25~Gb/s SFP+), public (1~Gb/s, RJ45). Le démon ouvre trois ports : 9100 (inter-nœuds TLS), 9200 (cluster API HTTP), 9300 (control API local HTTP).
+La figure~\ref{fig:arch-deploiement} représente le déploiement type sur un cluster Proxmox de trois nœuds avec Ceph répliqué, conforme à la photographie matérielle de \emph{GRIDZERO}. Les VLANs sont séparés : management (1~Gb/s, RJ45), stockage Ceph (10/25~Gb/s SFP+), public (1~Gb/s, RJ45). Le démon ouvre trois ports : 9100 (inter-nœuds TLS), 9200 (cluster API HTTP), 9300 (control API local HTTP).
 
 \begin{figure}[H]
 \centering
@@ -491,6 +492,7 @@ Le scheduler vCPU implémente une machine à états par \acrshort{vm} dont les t
 \begin{table}[H]
 \centering
 \small
+\caption{Seuils calibrés du scheduler vCPU.}
 \begin{tabular}{llp{6.5cm}}
 \toprule
 \textbf{Constante} & \textbf{Valeur} & \textbf{Rôle} \\
@@ -507,7 +509,7 @@ Le scheduler vCPU implémente une machine à états par \acrshort{vm} dont les t
 \texttt{DONOR\_CPU\_WEIGHT}       & 50     & Poids cgroup VM idle \\
 \bottomrule
 \end{tabular}
-\caption{Seuils calibrés du scheduler vCPU.}
+
 \label{tab:vcpu-seuils}
 \end{table}
 
@@ -546,6 +548,7 @@ Le scheduler disque suit une logique analogue, mais sans \emph{hotplug} : l'uniq
 \begin{table}[H]
 \centering
 \small
+\caption{Seuils du scheduler I/O disque.}
 \begin{tabular}{llp{6.0cm}}
 \toprule
 \textbf{Constante} & \textbf{Valeur} & \textbf{Rôle} \\
@@ -559,7 +562,7 @@ Le scheduler disque suit une logique analogue, mais sans \emph{hotplug} : l'uniq
 \texttt{DISK\_IDLE\_STABLE\_SECS}   & 60         & Durée avant rétrogradation \\
 \bottomrule
 \end{tabular}
-\caption{Seuils du scheduler I/O disque.}
+
 \label{tab:disk-seuils}
 \end{table}
 
@@ -583,7 +586,7 @@ Le scheduler disque suit une logique analogue, mais sans \emph{hotplug} : l'uniq
 
 Le multiplexeur GPU adresse le verrou n\textsuperscript{o}~3 (\acrshort{gpu} en passthrough exclusif). Son principe est de remplacer le passthrough par un \emph{accès médié} : les \acrshort{vm}s n'attaquent pas le \acrshort{gpu} directement, mais envoient des requêtes (\emph{Submit}, \emph{Alloc}, \emph{Free}) sur une socket Unix \texttt{/run/omega/gpu.sock} ; le démon les arbitre puis appelle le pilote DRM réel via \texttt{/dev/dri/renderD128}.
 
-La sérialisation par une \emph{file de priorité unique globale} (\texttt{BinaryHeap} triée par couple (priorité~\textsc{desc}, timestamp~\textsc{asc})) est imposée par l'architecture matérielle : un \acrshort{gpu} n'est pas \emph{thread-safe} pour des soumissions concurrentes. Quatre niveaux de priorité sont définis : \textsc{Low}~(0), \textsc{Normal}~(1), \textsc{High}~(2), \textsc{RealTime}~(3). La leader-election par \texttt{flock} sur \texttt{/run/omega-gpu-scheduler-<pci>.lock} garantit qu'un seul démon par nœud orchestre un \acrshort{gpu} donné.
+La sérialisation est faite par une \emph{file de priorité} (\texttt{BinaryHeap} triée par couple (priorité~\textsc{desc}, timestamp~\textsc{asc})). Quatre niveaux de priorité sont définis : \textsc{Low}~(0), \textsc{Normal}~(1), \textsc{High}~(2), \textsc{RealTime}~(3). La leader-election par \texttt{flock} sur \texttt{/run/omega-gpu-scheduler-<pci>.lock} garantit qu'un seul démon par nœud orchestre un \acrshort{gpu} donné.
 
 Le format binaire \texttt{GpuHeader} sur la socket comporte : magic \texttt{0x4F4D4750} (\og{}OMGP\fg{}), version, \texttt{vm\_id}, numéro de séquence, \texttt{payload\_len}, priorité (22 octets en-tête + payload). L'algorithme~\ref{algo:gpu} résume la boucle d'arbitrage.
 
@@ -668,6 +671,7 @@ Les seuils calibrés exacts de \texttt{MigrationPolicy} sont consignés dans le 
 \begin{table}[H]
 \centering
 \small
+\caption{Seuils de \texttt{MigrationPolicy}
 \begin{tabular}{llp{7cm}}
 \toprule
 \textbf{Seuil} & \textbf{Valeur} & \textbf{Effet} \\
@@ -684,7 +688,7 @@ Les seuils calibrés exacts de \texttt{MigrationPolicy} sont consignés dans le 
 \texttt{target\_max\_vcpu\_pct} & 80\%        & Idem pour vCPU \\
 \bottomrule
 \end{tabular}
-\caption{Seuils de \texttt{MigrationPolicy}.}
+.}
 \label{tab:migration-seuils}
 \end{table}
 
@@ -808,6 +812,7 @@ Le tableau~\ref{tab:synth-conception} synthétise les principaux modules conçus
 \begin{table}[H]
 \centering
 \small
+\caption{Synthèse des modules conçus.}
 \begin{tabular}{p{3cm}p{3.8cm}p{3.5cm}p{3.2cm}}
 \toprule
 \textbf{Module} & \textbf{Levier principal} & \textbf{Interfaces ext.} & \textbf{Invariant} \\
@@ -824,7 +829,7 @@ MigrationPolicy   & Seuils 85/95/60s                 & status nœuds + score    
 ResilientCollector & Circuit-breaker 3-états         & HTTP :9200                         & TTL cache 120\,s \\
 \bottomrule
 \end{tabular}
-\caption{Synthèse des modules conçus.}
+
 \label{tab:synth-conception}
 \end{table}
 

@@ -5,7 +5,7 @@
 \label{chap:implementation}
 
 
-Ce chapitre rend compte de la mise en œuvre concrète des concepts présentés au chapitre~\ref{chap:conception} et des résultats expérimentaux obtenus. Nous décrivons d'abord l'environnement matériel et logiciel cible, puis l'organisation du dépôt et du workspace Rust. Nous détaillons ensuite les implémentations module par module, l'intégration QEMU transparente, le déploiement et l'outillage opérationnel, la stratégie de tests à cinq niveaux, et nous présentons les résultats expérimentaux mesurés sur le banc local et les cibles documentées pour le cluster réel. Nous discutons enfin les limitations assumées du système et traçons les perspectives.
+Ce chapitre rend compte de la mise en œuvre concrète des concepts présentés au chapitre~\ref{chap:conception} et des résultats expérimentaux obtenus. Nous décrivons d'abord l'environnement matériel et logiciel cible, puis l'organisation du workspace Rust. Nous détaillons ensuite les implémentations module par module, l'intégration QEMU transparente, le déploiement et l'outillage opérationnel, la stratégie de tests à cinq niveaux, et nous présentons les résultats expérimentaux mesurés sur le banc local et les cibles documentées pour le cluster réel. Nous discutons enfin les limitations assumées du système et traçons les perspectives.
 
 % -----------------------------------------------------------------------------
 \section{Environnement matériel et logiciel}
@@ -13,28 +13,26 @@ Ce chapitre rend compte de la mise en œuvre concrète des concepts présentés 
 
 \subsection{Cluster cible : \emph{GRIDZERO}}
 
-Le cluster de référence est \emph{GRIDZERO}, monté par l'équipe ATLAS du projet \emph{GRIDONE}. Sa composition matérielle est synthétisée dans le tableau~\ref{tab:gridzero}. Quatre nœuds physiques sont raccordés en VLANs séparés (management 1~Gb/s, stockage Ceph 10/25~Gb/s SFP+, public 1~Gb/s). Un onduleur en amont assure la tolérance aux coupures du réseau électrique. La salle est instrumentée (température, humidité) par les capteurs IoT déployés par ATLAS.
+Le cluster de référence est \emph{GRIDZERO}. Sa composition matérielle est synthétisée dans le tableau~\ref{tab:gridzero}. Quatre nœuds physiques sont raccordés en VLANs séparés (management 1~Gb/s, stockage Ceph 10/25~Gb/s SFP+, public 1~Gb/s). Un onduleur en amont assure la tolérance aux coupures du réseau électrique. La salle est instrumentée (température, humidité) par les capteurs IoT déployés par ATLAS.
 
 \begin{table}[H]
 \centering
 \small
+\caption{Caractéristiques matérielles du cluster \emph{GRIDZERO}
 \begin{tabular}{lp{9.5cm}}
 \toprule
 \textbf{Caractéristique} & \textbf{Valeur} \\
 \midrule
-Nombre de nœuds          & 4 \\
-Hyperviseur              & Proxmox VE 8.x / 9.x \\
-CPU par nœud             & Intel Xeon Gold / Silver, 16 cœurs (32 threads avec HT) \\
-RAM par nœud             & 128 Gio DDR4 ECC \\
-Stockage local           & 512 Go SSD (Proxmox/Docker) + 4 To HDD pour Ceph OSD \\
-Pool Ceph                & RBD, réplication factor 2, sur 4 To $\times$ 4 nœuds \\
-GPU                      & NVIDIA RTX passthrough (sur 2 nœuds) \\
-Réseau Ceph              & 10/25 Gb/s SFP+ \\
-Réseau management        & 1 Gb/s RJ45 (VLAN dédié) \\
-Réseau public            & 1 Gb/s RJ45 (utilisateurs ENSPY) \\
+Nombre de nœuds          & 3 \\
+Hyperviseur              & Proxmox VE 9.1\\
+CPU par nœud             & Intel Corei5-10600K (RAM, REM), Intel Corei5-9400F (EMILIA) \\
+RAM par nœud             & 64 Gio (EMILIA, REM), 32 Gio pour RAM \\
+Stockage local           & 4.08 TiB (EMILIA), 7.74 TiB (RAM) et 7.28 TiB REM \\
+Pool Ceph                & RBD \\
+GPU                      & NVIDIA RTX 3090 Ti (RAM, REM) et NVIDIA RTX 2080 Ti (EMILIA)\\
 \bottomrule
 \end{tabular}
-\caption{Caractéristiques matérielles du cluster \emph{GRIDZERO}.}
+.}
 \label{tab:gridzero}
 \end{table}
 
@@ -43,12 +41,13 @@ Réseau public            & 1 Gb/s RJ45 (utilisateurs ENSPY) \\
 \begin{table}[H]
 \centering
 \small
+\caption{Pile logicielle du système.}
 \begin{tabular}{lll}
 \toprule
 \textbf{Composant} & \textbf{Version} & \textbf{Rôle} \\
 \midrule
-Kernel Linux           & $\ge$ 5.11           & userfaultfd non privilégié \\
-Proxmox VE             & 8.x / 9.x            & Hyperviseur, cluster Corosync, Ceph \\
+Kernel Linux           & $\ge$ 6.17           & userfaultfd non privilégié \\
+Proxmox VE             & 9.1            & Hyperviseur, cluster Corosync, Ceph \\
 QEMU                   & $\ge$ 7.0            & Émulation périphériques \\
 Rust~\cite{rust_lang} (toolchain) & $\ge$ 1.75 stable    & Compilation démon et agents \\
 Python                 & $\ge$ 3.10           & Contrôleur \\
@@ -60,7 +59,7 @@ axum                   & 0.7                  & Serveur HTTP \\
 click + structlog      & 8.x / 23.x           & CLI contrôleur + logs JSON \\
 \bottomrule
 \end{tabular}
-\caption{Pile logicielle du système.}
+
 \label{tab:stack}
 \end{table}
 
@@ -73,6 +72,7 @@ Le dépôt \texttt{Omega\_FusionCore\_Proxmox-main/} est organisé en \emph{work
 \begin{table}[H]
 \centering
 \small
+\caption{Composition du workspace Rust.}
 \begin{tabular}{lp{9cm}}
 \toprule
 \textbf{Crate} & \textbf{Rôle} \\
@@ -84,7 +84,7 @@ Le dépôt \texttt{Omega\_FusionCore\_Proxmox-main/} est organisé en \emph{work
 \texttt{omega-qemu-launcher}     & Wrapper QEMU, injecte le \texttt{memory-backend} au démarrage \\
 \bottomrule
 \end{tabular}
-\caption{Composition du workspace Rust.}
+
 \label{tab:workspace}
 \end{table}
 
@@ -252,6 +252,7 @@ Le tableau~\ref{tab:qemu-flow} illustre cette chaîne.
 \begin{table}[H]
 \centering
 \small
+\caption{Chaîne d'intégration QEMU transparente.}
 \begin{tabular}{p{2.2cm}p{11cm}}
 \toprule
 \textbf{Étape} & \textbf{Action} \\
@@ -266,7 +267,7 @@ Le tableau~\ref{tab:qemu-flow} illustre cette chaîne.
 8. agent         & Lit \texttt{uffd\_msg}, interroge stores, répond \texttt{UFFDIO\_COPY} \\
 \bottomrule
 \end{tabular}
-\caption{Chaîne d'intégration QEMU transparente.}
+
 \label{tab:qemu-flow}
 \end{table}
 
@@ -321,6 +322,7 @@ La stratégie de tests s'organise en cinq niveaux concentriques :
 \begin{table}[H]
 \centering
 \small
+\caption{Sections du runner \texttt{omega-lab.sh}
 \begin{tabular}{lp{9cm}}
 \toprule
 \textbf{Section} & \textbf{Tests inclus} \\
@@ -332,7 +334,7 @@ La stratégie de tests s'organise en cinq niveaux concentriques :
 5. Mixtes    & stress, live migration sous pression, drain nœud \\
 \bottomrule
 \end{tabular}
-\caption{Sections du runner \texttt{omega-lab.sh}.}
+.}
 \label{tab:test-sections}
 \end{table}
 
@@ -351,6 +353,7 @@ L'exécution des benchmarks Criterion du crate \texttt{node-bc-store} sur la mac
 \begin{table}[H]
 \centering
 \small
+\caption{Résultats Criterion mesurés en local (médianes, $n=10$).}
 \begin{tabular}{lrr}
 \toprule
 \textbf{Benchmark} & \textbf{Temps (médian)} & \textbf{Débit / observation} \\
@@ -368,7 +371,7 @@ L'exécution des benchmarks Criterion du crate \texttt{node-bc-store} sur la mac
 \texttt{protocol/batch\_put\_serialize/32}      & 17{,}73 µs       & Batch 32 pages $\to$ 6{,}9 Gio/s \\
 \bottomrule
 \end{tabular}
-\caption{Résultats Criterion mesurés en local (médianes, $n=10$).}
+
 \label{tab:bench-criterion}
 \end{table}
 
@@ -377,6 +380,7 @@ Les benchmarks complémentaires sur l'algorithme CLOCK (crate \texttt{node-a-age
 \begin{table}[H]
 \centering
 \small
+\caption{Benchmarks de l'algorithme CLOCK (\texttt{node-a-agent}
 \begin{tabular}{lrr}
 \toprule
 \textbf{Benchmark CLOCK} & \textbf{Temps (médian)} & \textbf{Observation} \\
@@ -390,7 +394,7 @@ Les benchmarks complémentaires sur l'algorithme CLOCK (crate \texttt{node-a-age
 \texttt{clock/mark\_present\_concurrent\_4threads} & 278 µs    & Contention sur 4 fils \\
 \bottomrule
 \end{tabular}
-\caption{Benchmarks de l'algorithme CLOCK (\texttt{node-a-agent}, $n=10$).}
+, $n=10$).}
 \label{tab:bench-clock}
 \end{table}
 
@@ -421,6 +425,7 @@ L'opérateur calcule le delta de timestamp entre l'événement \og{}page fault i
 \begin{table}[H]
 \centering
 \small
+\caption{Cibles cluster et protocoles de vérification.}
 \begin{tabular}{p{4cm}p{2.5cm}p{6.5cm}}
 \toprule
 \textbf{Métrique} & \textbf{Cible} & \textbf{Protocole de vérification} \\
@@ -433,7 +438,7 @@ Page faults sur 1000 cycles          & 0 erreur     & \texttt{fault\_errors == 0
 Hit rate store                       & $\approx$ 100\% & \texttt{hit\_count} / \texttt{get\_count} dans STATS \\
 \bottomrule
 \end{tabular}
-\caption{Cibles cluster et protocoles de vérification.}
+
 \label{tab:cibles-cluster}
 \end{table}
 
@@ -462,6 +467,7 @@ Le tableau~\ref{tab:pression} récapitule les observations attendues et la fonct
 \begin{table}[H]
 \centering
 \small
+\caption{Observations attendues sous pression mémoire.}
 \begin{tabular}{p{3.5cm}p{5cm}p{4.5cm}}
 \toprule
 \textbf{Métrique observée} & \textbf{Valeur attendue} & \textbf{Fonction validée} \\
@@ -474,7 +480,7 @@ PSI memory \texttt{some}   & Décroissance après éviction              & Soula
 \texttt{remote\_pages}     & Croissance pendant stress                & Mutualisation active \\
 \bottomrule
 \end{tabular}
-\caption{Observations attendues sous pression mémoire.}
+
 \label{tab:pression}
 \end{table}
 

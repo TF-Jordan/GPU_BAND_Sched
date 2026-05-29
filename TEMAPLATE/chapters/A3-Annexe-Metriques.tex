@@ -11,6 +11,7 @@ Cette annexe consigne l'ensemble des métriques exposées par le système, leurs
 \begin{table}[H]
 \centering
 \small
+\caption{Métriques du store.}
 \begin{tabular}{p{4.2cm}lp{8cm}}
 \toprule
 \textbf{Métrique} & \textbf{Type} & \textbf{Description} \\
@@ -29,7 +30,7 @@ Cette annexe consigne l'ensemble des métriques exposées par le système, leurs
 \texttt{ceph\_enabled}            & gauge   & 1 si backend Ceph RADOS actif, 0 si store RAM \\
 \bottomrule
 \end{tabular}
-\caption{Métriques du store.}
+
 \end{table}
 
 \section{Métriques de l'agent / démon}
@@ -37,6 +38,7 @@ Cette annexe consigne l'ensemble des métriques exposées par le système, leurs
 \begin{table}[H]
 \centering
 \small
+\caption{Métriques de l'agent / démon.}
 \begin{tabular}{p{4.2cm}p{8.5cm}}
 \toprule
 \textbf{Métrique} & \textbf{Description} \\
@@ -52,7 +54,7 @@ Cette annexe consigne l'ensemble des métriques exposées par le système, leurs
 \texttt{cpu\_pressure}            & Indicateur booléen pour migration prioritaire \\
 \bottomrule
 \end{tabular}
-\caption{Métriques de l'agent / démon.}
+
 \end{table}
 
 \section{Métriques Prometheus exposées sur \texttt{/control/metrics}}
@@ -78,6 +80,7 @@ omega_migrations_total{node="pve-node-a",type="cold"}  3
 \begin{table}[H]
 \centering
 \small
+\caption{Sources système consommées par le contrôleur.}
 \begin{tabular}{lp{8.5cm}}
 \toprule
 \textbf{Source} & \textbf{Champs lus} \\
@@ -91,7 +94,7 @@ cgroup \texttt{cpu.stat}      & \texttt{usage\_usec}, \texttt{nr\_throttled}, \t
 cgroup \texttt{io.stat}       & \texttt{rbytes}, \texttt{wbytes}, \texttt{rios}, \texttt{wios} par device \\
 \bottomrule
 \end{tabular}
-\caption{Sources système consommées par le contrôleur.}
+
 \end{table}
 
 \section{Grille d'interprétation PSI mémoire}
@@ -99,6 +102,7 @@ cgroup \texttt{io.stat}       & \texttt{rbytes}, \texttt{wbytes}, \texttt{rios},
 \begin{table}[H]
 \centering
 \small
+\caption{Seuils d'interprétation PSI mémoire (some.avg10).}
 \begin{tabular}{ll}
 \toprule
 \textbf{\texttt{some.avg10}} & \textbf{Interprétation} \\
@@ -109,5 +113,5 @@ $>$ 10\%     & Pression élevée, activer remote paging \\
 $>$ 20\%     & Pression critique, envisager migration \\
 \bottomrule
 \end{tabular}
-\caption{Seuils d'interprétation PSI mémoire (some.avg10).}
+
 \end{table}

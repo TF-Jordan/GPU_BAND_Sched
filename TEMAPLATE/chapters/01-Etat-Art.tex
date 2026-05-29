@@ -113,6 +113,7 @@ Notre positionnement est résolument \emph{pragmatique} : (i) nous restons en \e
 \begin{table}[H]
 \centering
 \small
+\caption{Positionnement de FusionCore parmi les systèmes de mémoire distante.}
 \begin{tabular}{lccccc}
 \toprule
 \textbf{Système} & \textbf{Patch kernel} & \textbf{Transport} & \textbf{Granularité} & \textbf{Cible} & \textbf{Modif. QEMU} \\
@@ -125,7 +126,7 @@ AIFM         & Userspace    & RDMA & Objet & Application   & N/A \\
 \textbf{FusionCore} & \textbf{Aucun} & \textbf{TCP/TLS} & \textbf{Page} & \textbf{Cluster Proxmox} & \textbf{Aucun} \\
 \bottomrule
 \end{tabular}
-\caption{Positionnement de FusionCore parmi les systèmes de mémoire distante.}
+
 \label{tab:cmp-rm}
 \end{table}
 
@@ -256,6 +257,7 @@ Le tableau~\ref{tab:cmp-proxmox-vs} récapitule, pour chacun des quatre verrous 
 \begin{table}[H]
 \centering
 \small
+\caption{Comparatif des verrous Proxmox et solutions adoptées.}
 \begin{tabular}{p{2.4cm}p{3.6cm}p{3.6cm}p{4.0cm}}
 \toprule
 \textbf{Verrou} & \textbf{Proxmox natif} & \textbf{Alternatives marché} & \textbf{FusionCore (ce travail)} \\
@@ -269,7 +271,7 @@ GPU exclusif & VFIO passthrough monopolisé & NVIDIA vGPU (licence) & Multiplexe
 I/O à l'aveugle & Aucun arbitrage métier & Pas de standard cluster & Pondération \texttt{io.weight} adaptative PSI \\
 \bottomrule
 \end{tabular}
-\caption{Comparatif des verrous Proxmox et solutions adoptées.}
+
 \label{tab:cmp-proxmox-vs}
 \end{table}
 

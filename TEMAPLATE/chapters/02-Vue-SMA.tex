@@ -87,6 +87,7 @@ L'examen du dépôt \texttt{Omega\_FusionCore\_Proxmox-main/} permet d'identifie
 \begin{table}[H]
 \centering
 \small
+\caption{Recensement des agents de \emph{FusionCore}
 \begin{tabular}{p{2.6cm}p{2.2cm}p{3.0cm}p{5cm}}
 \toprule
 \textbf{Nom} & \textbf{Architecture} & \textbf{Cardinalité} & \textbf{Rôle principal} \\
@@ -99,7 +100,7 @@ Sous-agents internes      & Réactive             & 9 par démon          & Sche
 \texttt{omega-uffd-bridge}& Réactive             & 1 par VM             & Pont userfaultfd injecté dans QEMU \\
 \bottomrule
 \end{tabular}
-\caption{Recensement des agents de \emph{FusionCore}.}
+.}
 \label{tab:agents-recensement}
 \end{table}
 
@@ -245,6 +246,7 @@ Le \texttt{omega-uffd-bridge.so} mérite une mention particulière. Chargé via 
 \begin{table}[H]
 \centering
 \small
+\caption{Sous-agents internes au \texttt{omega-daemon}
 \begin{tabular}{p{3.5cm}p{4.5cm}p{5cm}}
 \toprule
 \textbf{Sous-agent} & \textbf{But} & \textbf{Périodicité / déclencheur} \\
@@ -260,7 +262,7 @@ Le \texttt{omega-uffd-bridge.so} mérite une mention particulière. Chargé via 
 \texttt{MigrationExecutor}   & Exécuter \texttt{qm migrate} et nettoyer      & À la demande \\
 \bottomrule
 \end{tabular}
-\caption{Sous-agents internes au \texttt{omega-daemon}.}
+.}
 \label{tab:sous-agents}
 \end{table}
 
@@ -291,6 +293,7 @@ Les agents perçoivent leur environnement à travers les sources suivantes :
 \begin{table}[H]
 \centering
 \small
+\caption{Sources perceptuelles des agents.}
 \begin{tabular}{lll}
 \toprule
 \textbf{Source} & \textbf{Format} & \textbf{Agent consommateur} \\
@@ -307,7 +310,7 @@ Socket TCP/TLS port 9100          & Trame binaire 20\,o + payload & StoreServer 
 HTTP \texttt{/control/status} sur pairs & JSON          & contrôleur (via ResilientCollector) \\
 \bottomrule
 \end{tabular}
-\caption{Sources perceptuelles des agents.}
+
 \label{tab:perceptions}
 \end{table}
 
@@ -318,6 +321,7 @@ Les actions exécutées par les agents sur leur environnement sont les suivantes
 \begin{table}[H]
 \centering
 \small
+\caption{Effecteurs disponibles aux agents.}
 \begin{tabular}{lp{4cm}p{4.5cm}}
 \toprule
 \textbf{Effecteur} & \textbf{Effet} & \textbf{Agent} \\
@@ -334,7 +338,7 @@ QMP \texttt{balloon <mib>}               & Gonfle/dégonfle le ballon   & Balloo
 PUT\_PAGE / DELETE\_PAGE                 & Modifier l'état d'un pair   & EvictionEngine, cleanup \\
 \bottomrule
 \end{tabular}
-\caption{Effecteurs disponibles aux agents.}
+
 \label{tab:effecteurs}
 \end{table}
 
@@ -396,6 +400,7 @@ Le système emploie quatre protocoles de communication distincts, chacun adapté
 \begin{table}[H]
 \centering
 \small
+\caption{Comparatif des protocoles de communication.}
 \begin{tabular}{p{3cm}p{2.8cm}p{3.2cm}p{4cm}}
 \toprule
 \textbf{Protocole} & \textbf{Acteurs} & \textbf{Caractéristiques} & \textbf{Usage} \\
@@ -406,7 +411,7 @@ Tokio \texttt{mpsc}   & sous-agents intra-démon            & Asynchrone, en mé
 Unix \texttt{SCM\_RIGHTS} & bridge $\to$ agent             & Transfert de file descriptor          & Passage du \texttt{userfaultfd} \\
 \bottomrule
 \end{tabular}
-\caption{Comparatif des protocoles de communication.}
+
 \label{tab:protocoles-sma}
 \end{table}
 
@@ -417,6 +422,7 @@ L'approche normative de référence pour la communication inter-agents est l'\em
 \begin{table}[H]
 \centering
 \small
+\caption{Comparaison FIPA ACL vs notre protocole binaire.}
 \begin{tabular}{p{4cm}p{4.5cm}p{4.5cm}}
 \toprule
 \textbf{Critère} & \textbf{FIPA ACL} & \textbf{Notre protocole binaire} \\
@@ -429,7 +435,7 @@ Réversibilité      & Forte (chaque message renvoie à un acte de langage)  & F
 Surcoût en-tête    & Plusieurs centaines d'octets par message             & 20 octets fixes \\
 \bottomrule
 \end{tabular}
-\caption{Comparaison FIPA ACL vs notre protocole binaire.}
+
 \label{tab:fipa-vs-omega}
 \end{table}
 
@@ -440,6 +446,7 @@ Notre choix s'explique par la contrainte de latence : tant qu'un défaut de page
 \begin{table}[H]
 \centering
 \small
+\caption{Projection des opcodes binaires sur les performatives FIPA.}
 \begin{tabular}{lll}
 \toprule
 \textbf{Opcode} & \textbf{Performative FIPA} & \textbf{Justification} \\
@@ -454,7 +461,7 @@ Notre choix s'explique par la contrainte de latence : tant qu'un défaut de page
 \texttt{PING/PONG}     & \texttt{query-if / inform}          & Test de présence \\
 \bottomrule
 \end{tabular}
-\caption{Projection des opcodes binaires sur les performatives FIPA.}
+
 \label{tab:opcodes-fipa}
 \end{table}
 
@@ -517,6 +524,7 @@ Le tableau~\ref{tab:sma-properties} récapitule la vérification des propriété
 \begin{table}[H]
 \centering
 \small
+\caption{Vérification des propriétés de Wooldridge pour chaque agent.}
 \begin{tabular}{p{3.3cm}cccc}
 \toprule
 \textbf{Agent} & \textbf{Autonomie} & \textbf{Réactivité} & \textbf{Pro-activité} & \textbf{Socialité} \\
@@ -529,7 +537,7 @@ Le tableau~\ref{tab:sma-properties} récapitule la vérification des propriété
 Sous-agents internes          & \checkmark        & \checkmark        & \checkmark (boucle propre) & via tableau noir \\
 \bottomrule
 \end{tabular}
-\caption{Vérification des propriétés de Wooldridge pour chaque agent.}
+
 \label{tab:sma-properties}
 \end{table}
 
