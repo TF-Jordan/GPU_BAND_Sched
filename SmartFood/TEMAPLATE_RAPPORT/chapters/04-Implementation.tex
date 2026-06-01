@@ -1,0 +1,534 @@
+% =============================================================================
+% CHAPITRE 3 — IMPLÉMENTATION ET RÉSULTATS
+% =============================================================================
+\chapter{Implémentation et résultats}
+\label{chap:implementation}
+
+
+Ce chapitre rend compte de la mise en œuvre concrète des concepts présentés au chapitre~\ref{chap:conception} et des résultats expérimentaux obtenus. Nous décrivons d'abord l'environnement matériel et logiciel cible, puis l'organisation du workspace Rust. Nous détaillons ensuite les implémentations module par module, l'intégration QEMU transparente, le déploiement et l'outillage opérationnel, la stratégie de tests à cinq niveaux, et nous présentons les résultats expérimentaux mesurés sur le banc local et les cibles documentées pour le cluster réel. Nous discutons enfin les limitations assumées du système et traçons les perspectives.
+
+% -----------------------------------------------------------------------------
+\section{Environnement matériel et logiciel}
+\label{sec:env}
+
+\subsection{Cluster cible : \emph{GRIDZERO}}
+
+Le cluster de référence est \emph{GRIDZERO}. Sa composition matérielle est synthétisée dans le tableau~\ref{tab:gridzero}. Quatre nœuds physiques sont raccordés en VLANs séparés (management 1~Gb/s, stockage Ceph 10/25~Gb/s SFP+, public 1~Gb/s). Un onduleur en amont assure la tolérance aux coupures du réseau électrique. La salle est instrumentée (température, humidité) par les capteurs IoT déployés par ATLAS.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Caractéristiques matérielles du cluster \emph{GRIDZERO}.}
+\begin{tabular}{lp{9.5cm}}
+\toprule
+\textbf{Caractéristique} & \textbf{Valeur} \\
+\midrule
+Nombre de nœuds          & 3 \\
+Hyperviseur              & Proxmox VE 9.1\\
+CPU par nœud             & Intel Corei5-10600K (RAM, REM), Intel Corei5-9400F (EMILIA) \\
+RAM par nœud             & 64 Gio (EMILIA, REM), 32 Gio pour RAM \\
+Stockage local           & 4.08 TiB (EMILIA), 7.74 TiB (RAM) et 7.28 TiB REM \\
+Pool Ceph                & RBD \\
+GPU                      & NVIDIA RTX 3090 Ti (RAM, REM) et NVIDIA RTX 2080 Ti (EMILIA)\\
+\bottomrule
+\end{tabular}
+\label{tab:gridzero}
+\end{table}
+
+\subsection{Pile logicielle}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Pile logicielle du système.}
+\begin{tabular}{lll}
+\toprule
+\textbf{Composant} & \textbf{Version} & \textbf{Rôle} \\
+\midrule
+Kernel Linux           & $\ge$ 6.17           & userfaultfd non privilégié \\
+Proxmox VE             & 9.1            & Hyperviseur, cluster Corosync, Ceph \\
+QEMU                   & $\ge$ 7.0            & Émulation périphériques \\
+Rust~\cite{rust_lang} (toolchain) & $\ge$ 1.75 stable    & Compilation démon et agents \\
+Python                 & $\ge$ 3.10           & Contrôleur \\
+Tokio~\cite{tokio_doc} & 1.x                  & Runtime asynchrone Rust \\
+rustls                 & 0.23                 & TLS 1.3 \\
+DashMap~\cite{dashmap_crate} & 5.x                  & Map sharded thread-safe \\
+lz4\_flex~\cite{lz4_compression} & 0.11                 & Compression LZ4 \\
+axum                   & 0.7                  & Serveur HTTP \\
+click + structlog      & 8.x / 23.x           & CLI contrôleur + logs JSON \\
+\bottomrule
+\end{tabular}
+
+\label{tab:stack}
+\end{table}
+
+% -----------------------------------------------------------------------------
+\section{Structure du dépôt et workspace Rust}
+\label{sec:dep}
+
+Le dépôt \texttt{Omega\_FusionCore\_Proxmox-main/} est organisé en \emph{workspace Cargo} regroupant cinq crates. Le tableau~\ref{tab:workspace} le synthétise.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Composition du workspace Rust.}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{Crate} & \textbf{Rôle} \\
+\midrule
+\texttt{omega-daemon}            & Démon cluster complet (RAM, CPU, GPU, disque, migration) \\
+\texttt{node-a-agent}            & Agent userfaultfd standalone, alternative légère sans contrôleur \\
+\texttt{node-bc-store}           & Store distant (RAM ou Ceph RADOS), nettoyage orphelins, TLS \\
+\texttt{omega-gpu-proxy}         & Proxy GPU applicatif VM $\rightarrow$ nœud GPU \\
+\texttt{omega-qemu-launcher}     & Wrapper QEMU, injecte le \texttt{memory-backend} au démarrage \\
+\bottomrule
+\end{tabular}
+
+\label{tab:workspace}
+\end{table}
+
+À côté du workspace Rust, on trouve : \texttt{controller/} (contrôleur Python, dix-neuf modules), \texttt{omega-uffd-bridge/} (le \emph{bridge} \texttt{LD\_PRELOAD} en C), \texttt{scripts/} (déploiement, hooks Proxmox, tests, dashboard Grafana, alertes Prometheus), \texttt{docs/} (vingt fichiers de documentation technique), \texttt{tests/} (intégration et protocole). Le tout représente environ trente-deux mille lignes de code source mesurées par \texttt{wc~-l}.
+
+% -----------------------------------------------------------------------------
+\section{Implémentation du démon (\texttt{omega-daemon})}
+\label{sec:impl-daemon}
+
+\subsection{Store TCP/TLS et protocole binaire}
+
+Le serveur store (\texttt{store\_server.rs}) accepte des connexions TCP sécurisées par TLS~1.3 et dispatch chaque trame selon son opcode. La structure de données principale est une \texttt{DashMap<PageKey, (Box<[u8]>, Instant)>}, où \texttt{PageKey} est la paire \texttt{\{vm\_id: u32, page\_id: u64\}}. Le timestamp \texttt{Instant} est mis à jour à chaque accès (PUT comme GET) et alimente la stratégie d'éviction LRU du store (utilisée si la limite \texttt{max\_pages} est dépassée).
+
+La sérialisation/désérialisation des trames se fait par les fonctions \texttt{Message::from\_wire(\&[u8])} et \texttt{Message::to\_wire(\&mut Vec<u8>)} du module \texttt{node-bc-store/src/protocol.rs}. Les constantes clés sont : \texttt{MAGIC = 0x524D}, \texttt{HEADER\_SIZE = 20}, \texttt{PAGE\_SIZE = 4096}, \texttt{MAX\_PAYLOAD = 8192}, \texttt{MAX\_BATCH\_PAYLOAD = 262144}, \texttt{FLAG\_COMPRESSED = 0x01}, \texttt{COMPRESS\_MIN\_LEN = 64}.
+
+La compression LZ4 est intégrée de manière transparente : à la sérialisation, si \texttt{payload.len() $\ge$ COMPRESS\_MIN\_LEN}, la fonction \texttt{try\_compress()} est appelée ; si la version compressée est strictement plus courte, le flag \texttt{FLAG\_COMPRESSED} est positionné et le payload encodé sous la forme \texttt{[original\_len:~u32 BE][lz4\_data...]} (préfixe taille via \texttt{lz4\_flex::compress\_prepend\_size}). À la réception, le flag est testé et \texttt{lz4\_flex::decompress\_size\_prepended} est appelé puis le flag est effacé pour le reste du traitement.
+
+\subsection{Moteur d'éviction CLOCK}
+
+Le moteur d'éviction (\texttt{eviction\_engine.rs}) implémente la boucle de l'algorithme~\ref{algo:eviction}. La structure \texttt{EvictionEngine} agrège l'état partagé (\texttt{Arc<NodeState>}), le seuil de pression (\texttt{threshold\_pct: f64}, défaut 75,0~\%), l'intervalle adaptatif (\texttt{AdaptiveInterval} avec valeurs \texttt{(I\_base = 10, I\_accel = 2)} secondes) et le consommateur \texttt{FaultBus} optionnel (\texttt{fault\_consumer: Option<FaultBusConsumer>}).
+
+L'algorithme CLOCK opère sur la liste des pages \emph{tracked} par le \texttt{VmTracker} : chaque page porte un bit \emph{accessed}. Une aiguille circule : si le bit vaut 0, la page est candidate à l'éviction ; sinon, le bit est remis à 0 et l'aiguille avance. Le coût amorti est constant.
+
+La limite d'une migration par cycle (\texttt{limit = 1}) évite les avalanches en cas de saturation soudaine : le démon préfère réagir progressivement plutôt que de déclencher simultanément de nombreuses migrations qui s'entrechoqueraient sur le réseau.
+
+\subsection{FaultBus et contre-pression}
+
+Le \texttt{FaultBus} (\texttt{fault\_bus.rs}) est un canal \emph{mpsc} Tokio entre le handler \texttt{userfaultfd} (producteur) et le \texttt{FaultBusConsumer} agrégé par le moteur d'éviction (consommateur). L'énumération \texttt{FaultEvent} comporte trois variantes : \texttt{PageServed\{vm\_id, page\_id, latency\_us\}}, \texttt{PageMissing\{...\}}, \texttt{PageLocal\{...\}}. Le \texttt{FaultBusConsumer} maintient une fenêtre glissante (typiquement 10~secondes) des événements récents, calcule \texttt{remote\_rps} (\emph{requests per second}) et \texttt{avg\_latency\_us}, puis signale une \emph{pression} si \texttt{remote\_rps $>$ accel\_threshold}.
+
+L'invariant essentiel est : si la file du canal est pleine, l'événement est \emph{silencieusement abandonné} (via \texttt{try\_send} non bloquant). Mieux vaut perdre des statistiques que bloquer le handler \texttt{userfaultfd} qui retient le défaut de page côté \emph{guest}.
+
+\subsection{Quota et invariant strict}
+
+Le \texttt{QuotaRegistry} (\texttt{quota.rs}) est une \texttt{RwLock<HashMap<u32, VmQuota>>}. La structure \texttt{VmQuota} comprend \{\texttt{vm\_id, max\_mem\_mib, local\_budget\_mib, remote\_budget\_mib, remote\_used\_mib, created\_at, updated\_at}\}. La fonction publique critique est \texttt{check\_put(vm\_id, page\_size\_bytes) $\to$ QuotaCheck} qui renvoie \texttt{Allowed} si l'invariant tient, \texttt{Exceeded\{...\}} sinon, \texttt{NoQuota} si la VM est inconnue. L'invariant prouvé par construction et commenté en tête du fichier est :
+$$\forall v: \quad \text{local\_pages}(v) + \text{remote\_pages}(v) \le M_{\max}(v)$$
+
+La fonction \texttt{adjust\_for\_balloon()} permet de recalculer dynamiquement le budget distant à mesure que le \emph{balloon} virtio gonfle ou dégonfle :
+$$\text{remote\_budget} = M_{\max} - \text{balloon\_actual\_mib}$$
+
+\subsection{Scheduler vCPU et hotplug QMP}
+
+Le scheduler vCPU s'appuie sur trois modules complémentaires : \texttt{vcpu\_scheduler.rs} (orchestration, machine à états), \texttt{qmp\_vcpu.rs} (commandes QMP \texttt{device\_add cpu} / \texttt{device\_del}), \texttt{cgroup\_cpu\_monitor.rs} (lecture \texttt{cpu.stat} avec fenêtre glissante 100~ms). La matrice des slots est représentée par \texttt{Vec<Vec<PcpuSlot>>}, indexée par \texttt{(pcpu\_id, slot\_index)} ; chaque \texttt{PcpuSlot} contient l'ensemble des VMs assignées (max trois).
+
+L'algorithme~\ref{algo:vcpu} est implémenté par la fonction \texttt{VcpuScheduler::tick()} appelée par le \texttt{policy\_engine} à intervalle fixe (par défaut une seconde). Les transitions de la machine à états observent les seuils du tableau~\ref{tab:vcpu-seuils}.
+
+Le \emph{plancher de sécurité} évite qu'une VM brusquement déchargée perde tous ses vCPU au point de ne plus pouvoir absorber un pic suivant : pour une utilisation \emph{u}, le plancher dynamique est \texttt{floor = max(min\_vcpus, ceil(u/35.0))}.
+
+\subsection{Multiplexeur GPU}
+
+Le multiplexeur GPU regroupe cinq modules : \texttt{gpu\_multiplexer.rs} (file de priorité, sérialisation), \texttt{gpu\_drm\_backend.rs} (ouverture \texttt{/dev/dri/renderD*}, détection driver via \texttt{DRM\_IOCTL\_VERSION}), \texttt{gpu\_runtime.rs} (état GPU synchrone exposé via les APIs HTTP), \texttt{gpu\_virgl\_bridge.rs} (pont QEMU \texttt{virtio-gpu-omega} $\leftrightarrow$ multiplexeur), \texttt{gpu\_protocol.rs} (format binaire client-démon).
+
+L'en-tête \texttt{GpuHeader} (22~octets) est : \texttt{magic = 0x4F4D4750} (\og{}OMGP\fg{}), \texttt{version = 1}, \texttt{vm\_id: u32}, \texttt{seq: u32}, \texttt{payload\_len: u32}, \texttt{priority: u8}. La file globale est une \texttt{BinaryHeap<QueueEntry>} où l'ordre est défini par \texttt{(priority DESC, arrived ASC)}. Quatre niveaux de priorité : \textsc{Low}~(0), \textsc{Normal}~(1), \textsc{High}~(2), \textsc{RealTime}~(3).
+
+La détection du \emph{render node} (\texttt{/dev/dri/renderD128}, \texttt{D129}, ...) et l'identification du driver sont effectuées au démarrage via \texttt{ioctl DRM\_IOCTL\_VERSION}. Les drivers supportés sont \texttt{amdgpu}, \texttt{i915}, \texttt{nouveau}, \texttt{virtio-gpu}. Les allocations de buffer (\emph{GEM objects}) et les soumissions de \emph{command streams} sont des \texttt{ioctl} spécifiques au driver, appelés depuis un \emph{worker thread} dédié pour garantir la sérialisation.
+
+\subsection{Scheduler disque}
+
+Le scheduler disque (\texttt{disk\_io\_scheduler.rs} + \texttt{io\_cgroup.rs}) suit l'algorithme~\ref{algo:disk}. La lecture de \texttt{/proc/pressure/io} fournit \texttt{node\_pressure\_pct}. La lecture de \texttt{io.stat} dans le cgroup de chaque VM fournit les compteurs cumulatifs \texttt{rbytes, wbytes, rios, wios} dont la dérivée temporelle donne les bytes/seconde. L'écriture dans \texttt{io.weight} (plage 1--10000, défaut 100) traduit la décision en arbitrage effectif par le noyau.
+
+\subsection{Migration et cleanup}
+
+Le module \texttt{vm\_migration.rs} encapsule le cycle complet d'une migration. L'énumération \texttt{MigrationType} discrimine \textsc{Live}/\textsc{Cold}. L'énumération \texttt{MigrationReason} liste les déclencheurs : \textsc{MemoryPressure}, \textsc{CpuSaturation}, \textsc{ExcessiveRemotePaging}, \textsc{MaintenanceDrain}, \textsc{AdminRequest}. La fonction \texttt{build\_qm\_args(req)} construit la ligne de commande :
+\begin{itemize}[leftmargin=*]
+    \item Live : \texttt{[migrate, vm\_id, target, --online]} ;
+    \item Cold : \texttt{[migrate, vm\_id, target]} ;
+    \item Optionnel \texttt{--with-local-disks} pour clusters sans Ceph.
+\end{itemize}
+La machine à états du \texttt{MigrationStatus} est : \textsc{Pending} $\to$ \textsc{Running} $\to$ \textsc{Success} (ou \textsc{Failed}). L'exécution se fait via \texttt{tokio::process::Command} avec un timeout de 30 minutes. Le \emph{cleanup} (algorithme~\ref{algo:cleanup}) est invoqué à la transition \textsc{Success}.
+
+\subsection{APIs HTTP : cluster et control}
+
+L'API cluster (\texttt{cluster\_api.rs}, port 9200) expose à minima \texttt{GET /status}, qui retourne en JSON : RAM totale et libre, pages stockées, VMs locales (avec \texttt{avg\_cpu\_pct}, \texttt{throttle\_ratio}, \texttt{remote\_pages}), état GPU (backend, VRAM totale et libre, budgets réservés).
+
+L'API control (\texttt{control\_api.rs}, port 9300, \emph{local only}) offre les routes :
+\begin{itemize}[leftmargin=*]
+    \item \texttt{GET /control/status} : version détaillée du status pour le contrôleur ;
+    \item \texttt{POST /control/admit} : enregistrer un \texttt{VmQuota} ;
+    \item \texttt{POST /control/migrate} : déclencher une migration ;
+    \item \texttt{POST /control/vm/\{vmid\}/gpu} : ajuster le budget VRAM ;
+    \item \texttt{GET /control/gpu/status} : état détaillé du GPU ;
+    \item \texttt{GET /control/metrics} : métriques Prometheus.
+\end{itemize}
+Les deux serveurs sont basés sur \texttt{axum} 0.7 avec dispatch \texttt{Router::route(...)}.
+
+% -----------------------------------------------------------------------------
+\section{Implémentation du contrôleur Python}
+\label{sec:impl-controller}
+
+\subsection{CLI et architecture}
+
+Le contrôleur (\texttt{controller/controller/main.py}) expose une interface en ligne de commande basée sur \emph{Click} avec les sous-commandes :
+\begin{itemize}[leftmargin=*]
+    \item \texttt{monitor --interval 10} : boucle continue de collecte et de décision ;
+    \item \texttt{status} : capture instantanée de l'état cluster ;
+    \item \texttt{policy --dry-run} : évaluation des règles de migration sans exécution.
+\end{itemize}
+Les logs sont produits par \texttt{structlog} avec deux rendus possibles : \texttt{console} (lecture humaine) et \texttt{json} (ingestion par stack ELK).
+
+\subsection{Politique de migration}
+
+Le module \texttt{migration\_policy.py} implémente la décision live vs cold via les seuils du tableau~\ref{tab:migration-seuils}. Le placement utilise un score interne complémentaire :
+$$\text{placement\_score}(n) = 0{,}50 \cdot \text{ram\_free\_ratio} + 0{,}30 \cdot \text{vcpu\_free\_ratio} + 0{,}20 \cdot \text{disk\_free\_ratio}$$
+puis le score topologique de \texttt{topology\_placement.py} (eq.~\ref{eq:score}) sélectionne la cible finale.
+
+\subsection{Collecte résiliente}
+
+Le \texttt{ResilientCollector} (algorithme~\ref{algo:collector}) effectue jusqu'à trois tentatives par nœud avec backoff exponentiel et jitter. Le circuit-breaker passe en \textsc{Open} après trois échecs consécutifs (TTL 30~s), puis transitionne en \textsc{HalfOpen} pour tester la récupération avant de revenir en \textsc{Closed}. Quand le circuit est ouvert, le collecteur retourne l'état mis en cache (TTL 120~s) marqué \texttt{stale=True}.
+
+\begin{algorithm}[H]
+\caption{Collecte d'un nœud avec circuit-breaker (\texttt{ResilientCollector::collect})}
+\label{algo:collector}
+\KwData{Nœud $n$ ; état circuit $\sigma_n$ ; cache $C_n$ ; max\_retries = 3 ; ttl = 120\,s}
+\If{$\sigma_n = \textsc{Open}$ \textbf{et} now $<$ $n.\text{open\_until}$}{
+   \Return{$C_n$ avec stale = true} \tcp*{circuit ouvert : cache uniquement}
+}
+\If{$\sigma_n = \textsc{Open}$ \textbf{et} now $\ge n.\text{open\_until}$}{
+   $\sigma_n \gets \textsc{HalfOpen}$\;
+}
+\For{$i \gets 1$ \KwTo $3$}{
+   $\text{wait} \gets 0{,}5 \cdot 2^{i-1} \cdot (1 + \text{jitter}(\pm 10\%))$\;
+   \If{$i > 1$} {attendre wait}\;
+   \Try{HTTP GET \texttt{http://}$n$\texttt{:9200/status}, timeout 2 s}{
+       $\sigma_n \gets \textsc{Closed}$\;
+       $C_n \gets$ réponse + now\;
+       \Return{$C_n$ avec stale = false}\;
+   }
+   \Catch{erreur}{continuer}\;
+}
+$\sigma_n \gets \textsc{Open}$, $n.\text{open\_until} \gets$ now + 30\,s\;
+\Return{$C_n$ avec stale = true}\;
+\end{algorithm}
+
+% -----------------------------------------------------------------------------
+\section{Intégration QEMU transparente}
+\label{sec:impl-qemu}
+
+\subsection{omega-qemu-launcher}
+
+Le \texttt{omega-qemu-launcher} (crate Rust) est un wrapper d'invocation de QEMU. Il s'installe en lieu et place de \texttt{/usr/bin/kvm} (qui est lui-même un alias vers \texttt{/usr/bin/qemu-system-x86\_64}). Quand Proxmox démarre une VM, il appelle \texttt{kvm} avec une longue ligne de commande qui décrit la configuration (mémoire, vCPUs, disques, réseau, etc.). Le launcher intercepte cet appel, extrait le \texttt{vm\_id} et la taille RAM, démarre l'agent \texttt{node-a-agent} qui crée un \texttt{memfd} de la taille demandée, puis injecte dans la ligne de commande de QEMU :
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+-object memory-backend-file,id=ram0,size=<RAM>M,
+        mem-path=/proc/<agent_pid>/fd/<fd>,share=on
+-machine ...,memory-backend=ram0
+\end{lstlisting}
+
+Ce \texttt{memory-backend-file} adossé au \emph{memfd} de l'agent est l'astuce centrale : la mémoire \emph{guest} de QEMU est désormais une plage de mémoire partagée détenue par l'agent, sur laquelle \texttt{userfaultfd} peut être enregistré.
+
+La séquence complète est : \texttt{Proxmox} $\to$ \texttt{/usr/bin/kvm} ($\to$ shim \texttt{kvm-omega}) $\to$ \texttt{omega-qemu-launcher exec-proxmox} $\to$ \texttt{node-a-agent memfd} $\to$ QEMU réel + \texttt{omega-uffd-bridge.so}.
+
+\subsection{omega-uffd-bridge (LD\_PRELOAD)}
+
+Le \texttt{omega-uffd-bridge.so} est une bibliothèque dynamique C compilée avec \texttt{-shared} qui s'injecte dans le processus QEMU réel via \texttt{LD\_PRELOAD}. Sa logique :
+
+\begin{enumerate}[leftmargin=*]
+    \item À la \emph{constructor function} (attribut GCC \texttt{\_\_attribute\_\_((constructor))}), elle parcourt \texttt{/proc/self/maps} à la recherche d'un mapping \texttt{memfd:omega-vm-<vmid>-...} ;
+    \item Une fois le mapping détecté, elle ouvre un \texttt{userfaultfd} via le \emph{syscall} \texttt{SYS\_userfaultfd} (Linux ne fournit pas de wrapper libc) ;
+    \item Elle enregistre la plage du mapping via \texttt{UFFDIO\_REGISTER, mode = UFFDIO\_REGISTER\_MODE\_MISSING} ;
+    \item Elle ouvre une socket Unix \texttt{/var/lib/omega-qemu/vm-<vmid>/uffd.sock} et y \emph{passe le fd userfaultfd} via \texttt{SCM\_RIGHTS} (cmsg) à l'agent ;
+    \item L'agent reprend la main : il lit les \texttt{uffd\_msg} et répond par \texttt{UFFDIO\_COPY} avec le contenu fetché depuis les stores.
+\end{enumerate}
+
+Le tableau~\ref{tab:qemu-flow} illustre cette chaîne.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Chaîne d'intégration QEMU transparente.}
+\begin{tabular}{p{2.2cm}p{11cm}}
+\toprule
+\textbf{Étape} & \textbf{Action} \\
+\midrule
+1. Proxmox       & Appelle \texttt{kvm} avec sa ligne de commande standard \\
+2. kvm-omega     & Shim qui redirige vers \texttt{omega-qemu-launcher exec-proxmox} \\
+3. launcher      & Extrait \texttt{vm\_id} et RAM ; démarre \texttt{node-a-agent memfd} \\
+4. agent         & Crée un \texttt{memfd} taille RAM, ouvre socket Unix \texttt{uffd.sock} \\
+5. launcher      & Injecte \texttt{-object memory-backend-file,mem-path=/proc/<agent\_pid>/fd/<fd>} \\
+6. QEMU réel     & Lancé avec \texttt{LD\_PRELOAD=omega-uffd-bridge.so} \\
+7. bridge        & Détecte mapping memfd, crée userfaultfd, envoie fd à l'agent via SCM\_RIGHTS \\
+8. agent         & Lit \texttt{uffd\_msg}, interroge stores, répond \texttt{UFFDIO\_COPY} \\
+\bottomrule
+\end{tabular}
+
+\label{tab:qemu-flow}
+\end{table}
+
+L'aspect remarquable de cette intégration est qu'aucune ligne du code source de QEMU n'a été modifiée, et qu'une VM Proxmox standard peut être migrée sous \emph{FusionCore} sans modification de son fichier de configuration \texttt{/etc/pve/qemu-server/\{vmid\}.conf}, à l'exception du flag \texttt{hotplug=...} si l'on souhaite activer le hotplug vCPU.
+
+% -----------------------------------------------------------------------------
+\section{Déploiement et outillage opérationnel}
+\label{sec:deploy}
+
+\subsection{omega-lab.sh : menu unifié}
+
+Le script \texttt{scripts/omega-lab.sh} (84,5~Kio) est l'unique point d'entrée opérationnel du système. Son menu interactif couvre l'intégralité du cycle de vie :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Configuration} : \texttt{[c]} configurer les nœuds (IPs, VM de test, utilisateur SSH) ;
+    \item \textbf{Installation} : \texttt{[I]} installation complète, \texttt{[u]} désinstaller, \texttt{[b]} build (cargo build --release --workspace), \texttt{[d]} déployer (rsync + systemd) ;
+    \item \textbf{Tests} : \texttt{[A]} tous les tests, sections \texttt{[1]} à \texttt{[5]} (isolés, store+, cluster, GPU, mixtes), tests individuels \texttt{00}--\texttt{23}, scénarios mixtes \texttt{M1}--\texttt{M7}.
+\end{itemize}
+
+Le \emph{workflow} type pour une première installation est : \texttt{c} $\to$ saisie des IPs $\to$ \texttt{I} $\to$ installation complète $\to$ \texttt{A} $\to$ exécution de tous les tests avec pause entre sections.
+
+\subsection{Hooks Proxmox et systemd}
+
+Le démon est exposé comme service \texttt{systemd} (\texttt{omega-daemon.service}, fichier dans \texttt{scripts/systemd/}). Le hook Proxmox \texttt{scripts/proxmox\_hook.pl} et \texttt{scripts/omega-hook.pl} s'enregistrent dans la configuration cluster pour être appelés à chaque opération de cycle de vie de VM (\texttt{pre-start}, \texttt{post-stop}, \texttt{pre-migrate}, etc.), assurant la synchronisation avec notre démon.
+
+\subsection{Dashboard Grafana et alertes Prometheus}
+
+Le dashboard \texttt{scripts/grafana-dashboard.json}, alimenté par Prometheus~\cite{prometheus_doc}, fournit une vue temps réel : pages stockées par nœud, latences GET/PUT, hit rate, slots vCPU libres, VRAM réservée, migrations actives. Les alertes \texttt{scripts/prometheus-alerts.yml} couvrent :
+\begin{itemize}[leftmargin=*]
+    \item \texttt{OmegaNodeDown} : un nœud n'a pas répondu à \texttt{/control/metrics} depuis 60\,s ;
+    \item \texttt{OmegaRamHigh} : usage RAM > 90\,\% pendant 5\,min ;
+    \item \texttt{OmegaQuotaExceeded} : refus de \texttt{PUT\_PAGE} pour cause de quota ;
+    \item \texttt{OmegaMigrationStuck} : migration > 30\,min sans terminaison ;
+    \item \texttt{OmegaGpuVramSaturated} : VRAM libre < 256\,Mio.
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\section{Stratégie de tests}
+\label{sec:tests}
+
+\subsection{Cinq niveaux de validation}
+
+La stratégie de tests s'organise en cinq niveaux concentriques :
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Tests unitaires Rust} (\texttt{\#[cfg(test)]}) : par module, isolent les structures pures et mockent les interfaces externes.
+    \item \textbf{Tests de protocole} (\texttt{tests/protocol/}) : exercent la sérialisation/désérialisation des trames, les cas d'erreur (\emph{magic} invalide, opcode inconnu, payload trop grand), les séquences PING/PUT/GET/STATS.
+    \item \textbf{Tests d'intégration} (\texttt{tests/integration/}) : exercent des scénarios multi-processus avec store + agent + contrôleur.
+    \item \textbf{Sections du runner \texttt{omega-lab.sh}} (cf. tableau~\ref{tab:test-sections}) : couvrent le cycle complet sur cluster réel.
+    \item \textbf{Tests de conformité et de scalabilité} : \texttt{30-vm-conformity} (vérifie que 30 VMs respectent \texttt{-smp ...,maxcpus=...}, \texttt{hotplug cpu}, \texttt{qemu-guest-agent}, disque virtio-scsi, réseau virtio, métadonnées Omega) ; \texttt{31-scale-vms} (cible 500~VM avec \texttt{OMEGA\_SCALE\_TARGET=500}, batch 20, soak 3600\,s).
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Sections du runner \texttt{omega-lab.sh}.}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{Section} & \textbf{Tests inclus} \\
+\midrule
+1. Isolés    & smoke, réplication, failover, éviction \\
+2. Store+    & recall LIFO, prefetch, TLS TOFU, disk I/O \\
+3. Cluster   & vCPU élastique, migration, balloon, compaction \\
+4. GPU       & placement, scheduler round-robin \\
+5. Mixtes    & stress, live migration sous pression, drain nœud \\
+\bottomrule
+\end{tabular}
+\label{tab:test-sections}
+\end{table}
+
+\subsection{Tests unitaires : résultats locaux}
+
+L'exécution de \texttt{cargo test --release -p node-bc-store --lib} sur la machine de développement valide \textbf{35~tests sur 35 réussis} en moins de 50~ms, sans échec, sans test ignoré. La liste exhaustive des tests passés couvre : sérialisation/désérialisation de chaque opcode (PING, PUT, GET, DELETE, BATCH\_PUT, STATS), compression LZ4 (page zero, données aléatoires, données mixtes), invariants du \texttt{PageStore} (insertion/lecture/suppression, rejet de tailles non-conformes, incrément des compteurs de miss), persistance et redémarrage du store, suppression des pages d'une VM. Cette validation forme le plancher de garantie : aucune régression de protocole ou de quota n'est silencieuse.
+
+% -----------------------------------------------------------------------------
+\section{Résultats expérimentaux}
+\label{sec:resultats}
+
+\subsection{Benchmarks Criterion locaux}
+
+L'exécution des benchmarks Criterion du crate \texttt{node-bc-store} sur la machine de développement (binaire compilé en mode \texttt{release}, \texttt{x86\_64}, 10 itérations, échauffement 1\,s, mesure 2\,s) a produit les résultats consignés dans le tableau~\ref{tab:bench-criterion}. Ces mesures isolent la performance \emph{logicielle pure} (sans réseau) et constituent le plancher de référence pour les latences cluster.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Résultats Criterion mesurés en local (médianes, $n=10$).}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Benchmark} & \textbf{Temps (médian)} & \textbf{Débit / observation} \\
+\midrule
+\texttt{store/put\_4k}                          & 1{,}36 µs        & Insertion DashMap d'une page 4 Kio \\
+\texttt{store/get\_hit}                         & 207 ns           & Lecture DashMap (page présente) \\
+\texttt{store/get\_miss}                        & 44 ns            & Lookup négatif \\
+\texttt{protocol/serialize\_put\_4k}            & 400 ns           & Sérialisation trame 20\,o + 4\,Kio \\
+\texttt{protocol/lz4\_compress\_zero\_page}     & 586 ns           & Page entièrement à zéro $\to$ 6{,}5 Gio/s \\
+\texttt{protocol/lz4\_compress (text\_like)}    & 603 ns           & Données type texte $\to$ 6{,}3 Gio/s \\
+\texttt{protocol/lz4\_compress (mixed)}         & 575 ns           & Données mixtes $\to$ 6{,}6 Gio/s \\
+\texttt{protocol/batch\_put\_serialize/4}       & 2{,}69 µs        & Batch 4 pages $\to$ 5{,}7 Gio/s \\
+\texttt{protocol/batch\_put\_serialize/8}       & 4{,}63 µs        & Batch 8 pages $\to$ 6{,}6 Gio/s \\
+\texttt{protocol/batch\_put\_serialize/16}      & 9{,}01 µs        & Batch 16 pages $\to$ 6{,}8 Gio/s \\
+\texttt{protocol/batch\_put\_serialize/32}      & 17{,}73 µs       & Batch 32 pages $\to$ 6{,}9 Gio/s \\
+\bottomrule
+\end{tabular}
+
+\label{tab:bench-criterion}
+\end{table}
+
+Les benchmarks complémentaires sur l'algorithme CLOCK (crate \texttt{node-a-agent}, suite \texttt{eviction\_bench}) sont consignés dans le tableau~\ref{tab:bench-clock}.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Benchmarks de l'algorithme CLOCK (\texttt{node-a-agent}, $n=10$).}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Benchmark CLOCK} & \textbf{Temps (médian)} & \textbf{Observation} \\
+\midrule
+\texttt{clock/mark\_present}            & 124 ns                & Insertion d'une page dans la roue \\
+\texttt{clock/mark\_accessed}           & 69 ns                 & Mise à 1 du bit \emph{accessed} \\
+\texttt{clock/select\_victims/64}       & 4{,}00 µs             & Choix 1 victime sur 64 pages \\
+\texttt{clock/select\_victims/256}      & 16{,}28 µs            & 256 pages $\to$ 64 ns/page \\
+\texttt{clock/select\_victims/1024}     & 66{,}44 µs            & 1024 pages $\to$ 65 ns/page \\
+\texttt{clock/select\_victims/4096}     & 273 µs                & 4096 pages $\to$ 67 ns/page \\
+\texttt{clock/mark\_present\_concurrent\_4threads} & 278 µs    & Contention sur 4 fils \\
+\bottomrule
+\end{tabular}
+\label{tab:bench-clock}
+\end{table}
+
+\textbf{Lectures} :
+\begin{itemize}[leftmargin=*]
+    \item Le coût d'insertion d'une page (\texttt{store/put\_4k}) est dominé par le clonage du buffer 4~Kio (\texttt{Box<[u8]>}) et l'insertion dans le shard cible de la \texttt{DashMap}. À 1,36~µs par insertion, le débit théorique mono-thread est de l'ordre de 2,9~Gio/s, bien au-dessus du débit GbE attendu de 0,1~Gio/s, donc le store n'est pas le goulot d'étranglement.
+    \item La lecture \texttt{store/get\_hit} à 207~ns est dominée par le hash, le clonage du buffer et la mise à jour du timestamp LRU.
+    \item Le \texttt{store/get\_miss} à 44~ns confirme que le hashing seul est négligeable.
+    \item La sérialisation d'une trame complète (en-tête + 4~Kio) à 400~ns indique que la sérialisation n'est pas un poste de coût significatif face au transport réseau.
+    \item La compression LZ4 d'une page atteint 6,3 à 6,6~Gio/s, soit l'équivalent d'environ 1,5~Mpages/s. Activer la compression coûte 175~ns par page mais peut diviser par dix la taille des pages \emph{zero-filled} ou textuelles, ce qui est largement rentable sur un canal GbE.
+    \item Le débit du \emph{batch} converge vers ~6,9~Gio/s à 32 pages : amortir un RTT sur N pages divise sa contribution par N.
+    \item L'algorithme CLOCK affiche un coût quasi-constant de 65~ns par page scrutée, indépendamment de la taille de la roue (de 64 à 4096 pages). Cette propriété confirme la pertinence du choix de CLOCK face à LRU strict pour notre charge.
+    \item Le bench \texttt{clock/mark\_present\_concurrent\_4threads} (278~µs pour 4 fils en contention) atteste de la viabilité de la structure sous accès concurrent, ce qui est nécessaire car le \texttt{vm\_tracker} est interrogé en parallèle par le handler \texttt{userfaultfd} et par le moteur d'éviction.
+\end{itemize}
+
+\subsection{Latences cluster cibles et méthodologie}
+
+Sur le cluster réel \emph{GRIDZERO}, la mesure de latence de bout en bout d'un défaut de page distant suit la méthodologie documentée dans \texttt{docs/experiments.md} :
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+RUST_LOG=debug ./target/release/node-a-agent \
+    --stores "192.168.1.2:9100,192.168.1.3:9101" \
+    --mode demo 2>&1 | grep -E "(page fault|GET_PAGE|UFFDIO_COPY)"
+\end{lstlisting}
+
+L'opérateur calcule le delta de timestamp entre l'événement \og{}page fault interceptée\fg{} et l'événement \og{}page injectée avec succès\fg{}. Le tableau~\ref{tab:cibles-cluster} récapitule les cibles documentées et leur protocole de vérification.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Cibles cluster et protocoles de vérification.}
+\begin{tabular}{p{4cm}p{2.5cm}p{6.5cm}}
+\toprule
+\textbf{Métrique} & \textbf{Cible} & \textbf{Protocole de vérification} \\
+\midrule
+Latence \texttt{GET\_PAGE} localhost & $<$ 1 ms     & Bench Criterion + simulation 3 nœuds \\
+Latence \texttt{GET\_PAGE} GbE       & $<$ 3 ms     & Mesure delta timestamp \texttt{RUST\_LOG=debug} \\
+Débit \texttt{PUT\_PAGE} GbE         & $>$ 100 Mo/s & Stress \texttt{run\_stress.sh --vm 4 --vm-bytes 70\%} \\
+Downtime migration live              & $<$ 1 s      & Pause guest via \texttt{qm migrate} + log timestamps \\
+Page faults sur 1000 cycles          & 0 erreur     & \texttt{fault\_errors == 0} dans \texttt{/control/metrics} \\
+Hit rate store                       & $\approx$ 100\% & \texttt{hit\_count} / \texttt{get\_count} dans STATS \\
+\bottomrule
+\end{tabular}
+
+\label{tab:cibles-cluster}
+\end{table}
+
+\subsection{Comportement sous pression mémoire}
+
+Le scénario \texttt{run\_stress.sh} simule une pression mémoire continue par \texttt{stress-ng} et permet d'observer le système en boucle fermée. Le \emph{workflow} type de l'expérience est :
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+# Terminal 1
+./scripts/show_meminfo.sh --watch 3
+# Terminal 2
+./scripts/show_pressure.sh --watch 2
+# Terminal 3
+python3 -m controller.main monitor \
+    --interval 5 \
+    --stores "192.168.1.2:9100,192.168.1.3:9101" \
+    --threshold-enable 60 --threshold-migrate 85
+# Terminal 4
+./scripts/collect_baseline.sh --tag pre-stress
+./scripts/run_stress.sh --vm 4 --vm-bytes 70% --timeout 120
+./scripts/collect_baseline.sh --tag post-stress
+\end{lstlisting}
+
+Le tableau~\ref{tab:pression} récapitule les observations attendues et la fonction du système qu'elles confirment.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Observations attendues sous pression mémoire.}
+\begin{tabular}{p{3.5cm}p{5cm}p{4.5cm}}
+\toprule
+\textbf{Métrique observée} & \textbf{Valeur attendue} & \textbf{Fonction validée} \\
+\midrule
+\texttt{fault\_count}      & $>$ 0, proportionnel aux pages évincées & userfaultfd interception \\
+\texttt{hit\_rate\_pct}    & $\approx$ 100\%                          & Pages bien stockées \\
+Latence par page fault     & $<$ 5\,ms sur GbE                        & Cible objectif O1 \\
+Débit \texttt{PUT\_PAGE}   & $>$ 100\,Mo/s sur GbE                    & Cible NFR \\
+PSI memory \texttt{some}   & Décroissance après éviction              & Soulagement effectif \\
+\texttt{remote\_pages}     & Croissance pendant stress                & Mutualisation active \\
+\bottomrule
+\end{tabular}
+
+\label{tab:pression}
+\end{table}
+
+\subsection{Distribution des pages entre stores}
+
+Pour une série de PUT\_PAGE avec \texttt{page\_id} séquentiels, la distribution attendue est équilibrée (\(\approx\) 50/50 sur 2 stores, \(\approx\) 33/33/33 sur 3 stores) par construction du hash. Le \emph{check} se fait par interrogation des compteurs \texttt{pages\_stored} des stores via \texttt{python3 -m controller.main status}.
+
+\subsection{Scalabilité 500 VMs}
+
+Le test \texttt{31-scale-vms} démarre par lots successifs de 20 VMs jusqu'à atteindre la cible \texttt{OMEGA\_SCALE\_TARGET=500}, puis maintient le cluster en charge pendant un \emph{soak} d'une heure (\texttt{OMEGA\_SCALE\_SOAK\_SECS=3600}). Les critères de succès sont :
+\begin{itemize}[leftmargin=*]
+    \item Stabilité des démons sur les quatre nœuds (aucun \emph{restart}, aucune assertion violée) ;
+    \item Disponibilité continue des APIs Omega (\texttt{/control/status}, \texttt{/control/metrics}) ;
+    \item Aucun \emph{quota exceeded} ; \texttt{fault\_errors} = 0.
+\end{itemize}
+
+\subsection{Synthèse des résultats}
+
+Le système atteint les objectifs fixés sur les axes mesurables. Les résultats Criterion locaux dépassent largement les cibles GbE (le store en mémoire répond à 2,9~Gio/s là où GbE plafonne à 0,12~Gio/s) : le démon n'est jamais le goulot d'étranglement, le réseau l'est. Cette caractéristique justifie a posteriori le choix d'investir dans la \emph{compression LZ4} (qui réduit le volume sur le réseau) plutôt que dans l'optimisation du store (déjà sur-dimensionné).
+
+% -----------------------------------------------------------------------------
+\section{Limitations assumées}
+\label{sec:limitations}
+
+Le système, par choix de conception, ne traite pas certains cas. Ces limitations sont explicitement assumées et documentées :
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Pas de modification du noyau.} Tout fonctionne en espace utilisateur via \texttt{userfaultfd}. Conséquence : les optimisations qui nécessiteraient un patch (par exemple, traitement direct des \emph{huge pages}) ne sont pas disponibles.
+    \item \textbf{Pas de remplacement de QEMU/KVM.} La virtualisation reste inchangée. Conséquence : aucune optimisation \emph{KSM-aware} ou \emph{post-copy migration} custom.
+    \item \textbf{Pas de migration de disque local.} L'hypothèse Ceph RBD partagé est centrale. Sur un cluster sans stockage partagé, l'option \texttt{--with-local-disks} de \texttt{qm migrate} est utilisable mais sort du périmètre de mesure de ce rapport.
+    \item \textbf{Pas de QoS matérielle SAN/Ceph.} Seul l'arbitrage local cgroup~v2 est mis en œuvre.
+    \item \textbf{Pas de remplacement de Proxmox HA.} La tolérance aux pannes nœud reste celle de Proxmox natif.
+    \item \textbf{Compression LZ4 disponible mais non activée par défaut.} Le bit \texttt{FLAG\_COMPRESSED} et le code de compression sont opérationnels ; l'activation est laissée à l'opérateur via configuration.
+    \item \textbf{Pas de RDMA.} Le transport est exclusivement TCP/TLS. Une évolution RDMA est techniquement possible si la latence TCP devient insuffisante.
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\section{Perspectives}
+\label{sec:perspectives}
+
+Plusieurs axes d'évolution se dessinent à partir de l'état actuel du système :
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Activation conditionnelle de la compression LZ4.} Les benchmarks Criterion montrent un coût négligeable de la compression face à son bénéfice réseau ; l'activation par défaut, avec opt-out par variable d'environnement, est une amélioration immédiate.
+    \item \textbf{Prefetch des pages adjacentes.} Le bit \texttt{0x02} du champ \texttt{flags} est réservé dans le protocole pour un prefetch hint. L'implémentation consisterait à fetcher les pages \([p, p+k)\) en parallèle de la page demandée \(p\), où \(k\) est calibré par observation.
+    \item \textbf{Support RDMA (RoCE ou Infiniband).} Pour les clusters équipés, un backend de transport RDMA réduirait la latence de \texttt{GET\_PAGE} d'environ un ordre de grandeur. L'architecture en \emph{trait Transport} du démon facilite cette évolution.
+    \item \textbf{Backend Ceph systématique pour les stores.} La couche \texttt{CephStore} est implémentée et activée par détection (\texttt{librados} + \texttt{/etc/ceph/ceph.conf}). Sur le cluster \emph{GRIDZERO} qui dispose déjà de Ceph, son activation systématique simplifierait l'opération (les pages survivent à un redémarrage de démon).
+    \item \textbf{Intégration avec le portail Horizon (équipe SIGMA).} L'API \texttt{/control/admit} peut être consommée par le backend FastAPI du portail pour faire de l'admission \emph{cluster-aware} en amont de la création de VM par \texttt{proxmoxer}.
+    \item \textbf{Substrat pour ORION/Parallax.} Les ressources mutualisées (RAM, vCPU, GPU) sont des matières premières naturelles pour le scheduling distribué Ray/MPI/Dask piloté par ORION. Une intégration consisterait à exposer aux \emph{workers} Ray des budgets explicites issus de notre \texttt{QuotaRegistry}.
+    \item \textbf{Couverture de la bibliothèque OS métier.} Le rapport \acrshort{cubic} (annexe~\ref{annexe:iso}) couvre trois profils (dev, GUI, ML) ; la cible de dix images du projet \emph{GRIDONE} reste à compléter (CyberSec, BlueTeam, DevOps, EmbeddedSys, NetworkLab, HPC, Research) selon la méthodologie déjà éprouvée.
+\end{enumerate}
+
+
+L'implémentation couvre les vingt-cinq modules Rust du démon, les dix-neuf modules Python du contrôleur, le \emph{launcher} d'invocation QEMU et le \emph{bridge} \texttt{LD\_PRELOAD}. L'intégration QEMU transparente, sans modification ni du noyau ni de QEMU, a été matérialisée par la chaîne \texttt{kvm-omega} $\to$ launcher $\to$ memfd agent $\to$ QEMU réel + bridge. Le harnais de tests à cinq niveaux (unitaires, protocole, intégration, sections \texttt{omega-lab.sh}, conformité/scalabilité) couvre les fonctionnalités du système jusqu'à 500~VM. Les benchmarks Criterion mesurés en local confirment que le démon n'est jamais le goulot d'étranglement face au réseau, et que la compression LZ4 atteint 6,6~Gio/s de débit. Les limitations sont assumées et les perspectives tracées : activation LZ4, prefetch, RDMA, Ceph systématique, intégration avec les équipes SIGMA et ORION.

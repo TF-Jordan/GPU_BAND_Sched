@@ -1,0 +1,117 @@
+% =============================================================================
+% ANNEXE C — MÉTRIQUES PROMETHEUS
+% =============================================================================
+\chapter{Référentiel des métriques}
+\label{annexe:metriques}
+
+Cette annexe consigne l'ensemble des métriques exposées par le système, leurs types Prometheus et leur signification opérationnelle. Elles sont consommées par les dashboards Grafana de l'équipe ATLAS et par les alertes Prometheus.
+
+\section{Métriques du store (port 9100 / STATS et port 9300 / metrics)}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Métriques du store.}
+\begin{tabular}{p{4.2cm}lp{8cm}}
+\toprule
+\textbf{Métrique} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{pages\_stored}            & counter & Nombre de pages actuellement en RAM dans le store \\
+\texttt{estimated\_bytes}         & gauge   & \texttt{pages\_stored $\times$ 4096} \\
+\texttt{put\_count}               & counter & Total de PUT\_PAGE reçus \\
+\texttt{get\_count}               & counter & Total de GET\_PAGE reçus \\
+\texttt{delete\_count}            & counter & Total de DELETE\_PAGE reçus \\
+\texttt{hit\_count}               & counter & GET\_PAGE retournant une page (OK) \\
+\texttt{miss\_count}              & counter & GET\_PAGE NOT\_FOUND \\
+\texttt{hit\_rate\_pct}           & gauge   & \texttt{hit\_count / get\_count $\times$ 100} \\
+\texttt{active\_connections}      & gauge   & Connexions TCP actives \\
+\texttt{pages\_orphaned\_deleted} & counter & Pages supprimées par OrphanCleaner (VMs disparues) \\
+\texttt{disk\_available\_mib}     & gauge   & Espace disque sur le nœud store (via \texttt{statvfs}) \\
+\texttt{ceph\_enabled}            & gauge   & 1 si backend Ceph RADOS actif, 0 si store RAM \\
+\bottomrule
+\end{tabular}
+
+\end{table}
+
+\section{Métriques de l'agent / démon}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Métriques de l'agent / démon.}
+\begin{tabular}{p{4.2cm}p{8.5cm}}
+\toprule
+\textbf{Métrique} & \textbf{Description} \\
+\midrule
+\texttt{fault\_count}             & Page faults interceptés par userfaultfd \\
+\texttt{fault\_served}            & Faults résolus avec succès (UFFDIO\_COPY) \\
+\texttt{fault\_errors}            & Faults ayant échoué (page zéro injectée) \\
+\texttt{pages\_evicted}           & Pages envoyées vers les stores (PUT\_PAGE) \\
+\texttt{pages\_fetched}           & Pages récupérées depuis les stores (GET\_PAGE) \\
+\texttt{fetch\_zeros}             & Pages retournées comme zéro (absentes du store) \\
+\texttt{vcpu\_current}            & vCPUs actuellement attribués à la VM \\
+\texttt{vcpu\_utilization\_pct}   & Charge CPU via cgroup v2 \texttt{usage\_usec} \\
+\texttt{cpu\_pressure}            & Indicateur booléen pour migration prioritaire \\
+\bottomrule
+\end{tabular}
+
+\end{table}
+
+\section{Métriques Prometheus exposées sur \texttt{/control/metrics}}
+
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize, frame=single]
+omega_vcpu_slots_total{node="pve-node-a"}             36
+omega_vcpu_slots_used{node="pve-node-a"}              12
+omega_vcpu_slots_free{node="pve-node-a"}              24
+omega_vcpu_steal_pct{node="pve-node-a"}                1.20
+omega_vcpu_vm_count{node="pve-node-a"}                 4
+omega_gpu_vram_total_mib{node="pve-node-a"}         8192
+omega_gpu_vram_reserved_mib{node="pve-node-a"}      4096
+omega_gpu_vram_free_mib{node="pve-node-a"}          4096
+omega_store_pages_stored{node="pve-node-a"}         1024
+omega_store_hit_rate_pct{node="pve-node-a"}           98.7
+omega_migrations_active{node="pve-node-a"}             0
+omega_migrations_total{node="pve-node-a",type="live"} 12
+omega_migrations_total{node="pve-node-a",type="cold"}  3
+\end{lstlisting}
+
+\section{Métriques système (lues par le contrôleur)}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Sources système consommées par le contrôleur.}
+\begin{tabular}{lp{8.5cm}}
+\toprule
+\textbf{Source} & \textbf{Champs lus} \\
+\midrule
+\texttt{/proc/meminfo}        & \texttt{MemTotal}, \texttt{MemAvailable}, \texttt{SwapTotal}, \texttt{SwapFree} \\
+\texttt{/proc/pressure/memory}& \texttt{some.avg10/60/300}, \texttt{full.avg10/60/300} \\
+\texttt{/proc/pressure/cpu}   & \texttt{some.avg10/60/300} \\
+\texttt{/proc/pressure/io}    & \texttt{some.avg10/60/300}, \texttt{full.avg10/60/300} \\
+\texttt{/proc/stat}           & \texttt{steal} (champ 8 de la ligne \texttt{cpu}) \\
+cgroup \texttt{cpu.stat}      & \texttt{usage\_usec}, \texttt{nr\_throttled}, \texttt{throttled\_usec} \\
+cgroup \texttt{io.stat}       & \texttt{rbytes}, \texttt{wbytes}, \texttt{rios}, \texttt{wios} par device \\
+\bottomrule
+\end{tabular}
+
+\end{table}
+
+\section{Grille d'interprétation PSI mémoire}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Seuils d'interprétation PSI mémoire (some.avg10).}
+\begin{tabular}{ll}
+\toprule
+\textbf{\texttt{some.avg10}} & \textbf{Interprétation} \\
+\midrule
+0--1\%       & Aucune pression, état nominal \\
+1--10\%      & Pression modérée, surveiller \\
+$>$ 10\%     & Pression élevée, activer remote paging \\
+$>$ 20\%     & Pression critique, envisager migration \\
+\bottomrule
+\end{tabular}
+
+\end{table}

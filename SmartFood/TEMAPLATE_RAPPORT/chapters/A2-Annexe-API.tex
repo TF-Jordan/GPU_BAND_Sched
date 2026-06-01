@@ -1,0 +1,74 @@
+% =============================================================================
+% ANNEXE B — API HTTP
+% =============================================================================
+\chapter{Catalogue des API HTTP}
+\label{annexe:api}
+
+Cette annexe consigne les points d'entrée HTTP exposés par les démons et le contrôleur. Trois ports sont impliqués : 9100 (TLS, binaire, déjà décrit en annexe~\ref{annexe:protocole}), 9200 (HTTP, cluster), 9300 (HTTP, control local).
+
+\section{Port 9200 : API cluster}
+
+Cette API est consommée par le contrôleur Python pour obtenir l'état de chaque nœud. Elle est en HTTP plain car restreinte au VLAN management par le firewall hôte.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Routes du port 9200 (API cluster).}
+\begin{tabular}{lp{2.5cm}p{8cm}}
+\toprule
+\textbf{Route} & \textbf{Méthode} & \textbf{Réponse} \\
+\midrule
+\texttt{/status}      & GET & JSON \{node\_id, mem\_total\_mib, mem\_free\_mib, pages\_stored, vcpu\_total, vcpu\_free, ceph\_enabled, vms: [\{vmid, avg\_cpu\_pct, throttle\_ratio, remote\_pages\}], gpu: \{backend, vram\_total\_mib, vram\_free\_mib, budgets\}\} \\
+\bottomrule
+\end{tabular}
+
+\end{table}
+
+\section{Port 9300 : API control local}
+
+Cette API n'est accessible que depuis \texttt{127.0.0.1}. Elle pilote le démon localement et expose les métriques Prometheus.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Routes du port 9300 (API control local).}
+\begin{tabular}{lp{2.5cm}p{7.5cm}}
+\toprule
+\textbf{Route} & \textbf{Méthode} & \textbf{Effet} \\
+\midrule
+\texttt{/control/status}          & GET  & Version détaillée du status \\
+\texttt{/control/metrics}         & GET  & Métriques au format Prometheus \\
+\texttt{/control/admit}           & POST & Enregistre un \texttt{VmQuota} (body JSON) \\
+\texttt{/control/migrate}         & POST & Déclenche une migration (body : \{vmid, target, type\}) \\
+\texttt{/control/evict}           & POST & Force une éviction immédiate (body : \{vmid, page\_id\}) \\
+\texttt{/control/vm/\{vmid\}/gpu} & POST & Ajuste le budget VRAM (body : \{vram\_mib\}) \\
+\texttt{/control/gpu/status}      & GET  & État détaillé du GPU et budgets \\
+\texttt{/control/vm/\{vmid\}/vcpu}& POST & Hotplug/unplug vCPU (body : \{count\}) \\
+\bottomrule
+\end{tabular}
+
+\end{table}
+
+\section{CLI du contrôleur Python}
+
+Le contrôleur s'invoque via Click :
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, frame=single]
+# Statut instantane
+python3 -m controller.main status \
+    --stores "192.168.1.2:9100,192.168.1.3:9101"
+
+# Boucle de monitoring
+python3 -m controller.main monitor \
+    --interval 5 \
+    --stores "192.168.1.2:9100,192.168.1.3:9101" \
+    --threshold-enable 60 \
+    --threshold-migrate 85
+
+# Evaluation de la politique sans execution
+python3 -m controller.main policy --dry-run \
+    --stores "192.168.1.2:9100,192.168.1.3:9101"
+
+# Niveau de log et format
+python3 -m controller.main --log-level INFO --log-format json status
+\end{lstlisting}

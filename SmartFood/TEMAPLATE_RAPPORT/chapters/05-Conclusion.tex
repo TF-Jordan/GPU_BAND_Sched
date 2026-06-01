@@ -1,0 +1,54 @@
+% =============================================================================
+% CONCLUSION GÉNÉRALE
+% =============================================================================
+\chapter*{Conclusion générale}
+\addcontentsline{toc}{chapter}{Conclusion générale}
+\markboth{\textit{Conclusion générale}}{\textit{Conclusion générale}}
+
+\section*{Récapitulatif de la contribution}
+
+Le présent rapport a exposé la conception, l'implémentation et la validation du système \textbf{\emph{FusionCore}}, qui constitue la contribution de l'équipe OMEGA au programme collectif \emph{GRIDONE} de l'\acrshort{enspy}. Le travail s'attaque aux quatre verrous structurels que présente un cluster Proxmox~VE dans sa configuration par défaut : la mémoire cloisonnée par nœud, les \acrshort{vcpu}s statiques, les accélérateurs graphiques monopolisés par passthrough exclusif, et les entrées-sorties disque arbitrées à l'aveugle. À chacun de ces verrous, le système oppose un mécanisme dédié et opérationnel.
+
+\paragraph{Au verrou mémoire,} nous avons opposé un mécanisme de \emph{paging distant} fondé sur \texttt{userfaultfd} et un protocole binaire de 20~octets sur TCP/TLS. L'algorithme d'éviction CLOCK, alimenté par une boucle adaptative (intervalle entre 2 et 10~secondes selon le taux de défauts), évince les pages froides vers les nœuds pairs ; à l'accès suivant, la page est rapatriée en moins de 5~millisecondes sur \acrshort{gbe}. L'invariant strict $\text{local} + \text{remote} \le M_{\max}$ est vérifié à chaque opération \texttt{PUT\_PAGE} par le \texttt{QuotaRegistry}. Une intégration QEMU transparente, par \emph{launcher} d'invocation et \emph{bridge} \texttt{LD\_PRELOAD}, permet le déploiement sur des \acrshort{vm}s existantes sans modification de leur configuration.
+
+\paragraph{Au verrou processeur,} nous avons opposé un \emph{scheduler élastique} qui combine \emph{hotplug} \acrshort{qmp} (\texttt{device\_add cpu} / \texttt{device\_del}) et pondération cgroup~v2 (\texttt{cpu.weight} dynamique). Une machine à états par \acrshort{vm}, gouvernée par les seuils \texttt{HOTPLUG\_TRIGGER\_PCT~=~80\%}, \texttt{DOWNSCALE\_TRIGGER\_PCT~=~35\%}, \texttt{DOWNSCALE\_STABLE\_SECS~=~60}, fournit une élasticité fine. Le scheduler disque applique la même logique sur \texttt{io.weight} en se calant sur la pression PSI.
+
+\paragraph{Au verrou \acrshort{gpu},} nous avons opposé un \emph{multiplexeur} en file de priorité unique, avec leader-election par \texttt{flock(2)} sur \texttt{/run/omega-gpu-scheduler-<pci>.lock}, et budgets \acrshort{vram} explicites par \acrshort{vm}. Le passthrough exclusif est remplacé par un accès médié au pilote DRM via \texttt{/dev/dri/renderD*}.
+
+\paragraph{Au verrou de la migration,} nous avons opposé une \emph{politique automatique} pilotée par un score multi-critères pondéré $S(n) = 0{,}50\,S_{\text{RAM}} + 0{,}25\,S_{\text{topo}} + 0{,}15\,S_{\text{CPU}} + 0{,}10\,S_{\text{mig}}$ et par des seuils calibrés (\texttt{ram\_high\_pct~=~85\%}, \texttt{ram\_critical\_pct~=~95\%}, \texttt{idle\_duration\_secs~=~60}). Un veto absolu \acrshort{gpu} protège l'invariant matériel : aucune \acrshort{vm} \acrshort{gpu} ne migre vers un nœud sans \acrshort{vram} suffisante.
+
+L'ensemble représente, dans le dépôt \texttt{Omega\_FusionCore\_Proxmox-main/}, vingt-cinq modules Rust (démon, environ quatorze mille lignes), dix-neuf modules Python (contrôleur), un \emph{bridge} \texttt{LD\_PRELOAD} en C, un wrapper QEMU, et un harnais de tests à cinq sections (\texttt{omega-lab.sh}, 84,5~kilo-octets) culminant en une validation à 500~\acrshort{vm}s avec rodage d'une heure.
+
+\section*{Retour sur la problématique}
+
+La problématique posée en introduction, comment, sans modifier le code source de Proxmox, du noyau Linux ou de QEMU, mutualiser la mémoire vive, les processeurs, les accélérateurs graphiques et les entrées-sorties d'un cluster aux nœuds hétérogènes tout en gardant une gestion transparente pour les machines virtuelles, reçoit une réponse positive et nuancée. \emph{Positive} : la pile produite démontre la faisabilité technique de l'approche, atteint les cibles non-fonctionnelles fixées (latences \texttt{GET\_PAGE} mesurées en local à 207~ns en cache, sérialisation à 400~ns, compression LZ4 à 6,5~Gio/s, débit batch à 6,9~Gio/s), et a été déployable sur des \acrshort{vm}s Proxmox standard sans modification de leur configuration. \emph{Nuancée} : la transparence pour le \emph{guest} n'est jamais totale, une page distante coûte plus cher qu'une page locale, ce qui rend le système particulièrement adapté à des charges où la majorité des pages restent localement utilisées (charge typique d'une \acrshort{vm} bureautique ou de développement), et moins adapté à des charges où l'accès mémoire est massivement aléatoire (calcul scientifique \emph{in-memory}). L'introduction d'une compression LZ4 systématique et d'un \emph{prefetch} adjacent permettrait probablement d'élargir significativement ce domaine d'applicabilité.
+
+\section*{Positionnement dans GRIDONE}
+
+Le système se positionne comme la \emph{fondation matérielle logique} du projet \emph{GRIDONE}. Les autres équipes du projet en consomment naturellement les capacités :
+
+\begin{itemize}[leftmargin=*]
+    \item L'équipe \textbf{SIGMA} et son portail \emph{Horizon} (FastAPI~+~Next.js) appellent l'API \texttt{/control/admit} pour valider à l'amont les réservations de \acrshort{vm}s. Notre admission cluster-wide (RAM, \acrshort{vcpu}, \acrshort{vram}) garantit qu'aucune réservation acceptée ne dépassera la capacité physique.
+    \item L'équipe \textbf{ORION} et son projet \emph{Parallax} (calcul distribué Ray/MPI/Dask) exécute ses \emph{workers} dans des \acrshort{vm}s dont les ressources sont arbitrées par notre \emph{scheduler élastique}. La sur-allocation contrôlée 3:1 maximise l'utilisation, le \emph{hotplug} \acrshort{vcpu} suit dynamiquement les phases de calcul.
+    \item L'équipe \textbf{ATLAS} et son projet \emph{IronGrid} fournissent le cluster physique et la supervision IoT ; notre démon expose à Prometheus les métriques qui alimentent leurs dashboards Grafana.
+\end{itemize}
+
+La bibliothèque d'images Ubuntu Server personnalisées avec \acrshort{cubic} (annexe~\ref{annexe:iso}) ferme la boucle : un étudiant qui réserve une \acrshort{vm} sur \emph{Horizon} démarre directement dans un environnement prêt à l'emploi (développement, interface graphique, machine learning), sans temps d'installation manuelle.
+
+\section*{Apport pédagogique pour l'ENSPY}
+
+Au-delà de son utilité opérationnelle, le système \emph{FusionCore} constitue un objet pédagogique riche pour le Département de Génie Informatique de l'\acrshort{enspy}. Il met en œuvre, dans un même artefact réel, des concepts vus dans plusieurs unités d'enseignement : \emph{Systèmes d'Exploitation} (cgroups, PSI, \texttt{userfaultfd}, hotplug), \emph{Systèmes Distribués} (consensus de placement, circuit-breaker, RPC binaire), \emph{Programmation Système} (Rust asynchrone, sockets Unix, \texttt{SCM\_RIGHTS}, \texttt{LD\_PRELOAD}), \emph{Sécurité} (TLS~1.3, modèle TOFU), \emph{Génie Logiciel} (architecture en modules, tests à cinq niveaux, observabilité). Sa lecture, code source comme documentation, peut servir de support pratique à des travaux pratiques et à des projets de fin de cycle.
+
+\section*{Prochaines étapes immédiates}
+
+Trois actions concrètes peuvent prolonger directement ce travail dans les semaines qui viennent :
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Activation par défaut de la compression LZ4.} Les benchmarks Criterion ont montré un coût de 575~ns par page pour un débit de 6,6~Gio/s ; sur \acrshort{gbe}, le gain sur les pages \emph{zero-filled} et textuelles dépasse largement ce surcoût. Une simple variable d'environnement \texttt{OMEGA\_COMPRESSION\_DEFAULT=on} dans \texttt{scripts/cluster.conf} suffirait.
+    \item \textbf{Couverture complète des 10 images OS.} Le rapport \acrshort{cubic} (annexe~\ref{annexe:iso}) en couvre trois ; la méthodologie permet d'atteindre les sept restantes (CyberSec, BlueTeam, DevOps, EmbeddedSys, NetworkLab, HPC, Research) en une à deux journées de travail par image.
+    \item \textbf{Intégration end-to-end avec le portail Horizon.} La cible \og{}de la réservation sur le portail à la connexion SSH, zéro ligne de terminal\fg{} définie par SIGMA est à portée : il suffit d'enchaîner \texttt{POST /control/admit} (\emph{omega-controller}) $\to$ \texttt{proxmoxer.qemu.create} $\to$ \texttt{cloud-init} (clé SSH injectée).
+\end{enumerate}
+
+\section*{Mot de la fin}
+
+L'idée fondatrice de \emph{GRIDONE}, qui s'inscrit dans la lignée des systèmes distribués modernes~\cite{kleppmann_ddia} et de l'orchestration cluster à grande échelle~\cite{verma_2015_borg}, que des machines individuellement modestes, mises en commun et orchestrées correctement, valent plus que la somme de leurs parties, trouve dans \emph{FusionCore} une matérialisation technique précise. Là où Proxmox~VE par défaut traite chaque nœud comme un silo, notre système traite le cluster comme un substrat unique. Le passage du \og{}refus d'admission alors qu'il reste 60~\% de RAM cluster\fg{} à \og{}admission acceptée avec mémoire distante mutualisée\fg{} n'est pas seulement un gain technique : c'est, pour l'étudiant Karlos évoqué en introduction, la différence entre un projet de fin d'études contraint par le matériel et un projet libéré pour faire science. Si ce rapport a contribué, ne serait-ce que modestement, à rendre cette différence concrète, son objectif est atteint.

@@ -1,0 +1,474 @@
+% =============================================================================
+% Template simplifié — structure : chapters/ | bibliography/ | assets/
+% Basé sur IPLeiriaThesis (José Areia) — rendu visuel identique.
+% =============================================================================
+
+\documentclass[
+    language=french,
+    school=estg,
+    docstage=final,
+    media=paper,
+    bookprint=false,
+    linkcolor=red!45!black,
+    chapterstyle=classic,
+    coverstyle=classic,
+    aiacknowledgement=false,
+    listprefix=false
+]{IPLeiriaThesis}
+\usepackage{datetime2}
+\usepackage{tikz}
+\usetikzlibrary{positioning, shapes.geometric, arrows.meta, automata, calc, fit}
+\let\openbox\relax
+\usepackage{amsthm}
+\usepackage{amssymb}
+\usepackage[french, ruled, vlined, linesnumbered]{algorithm2e}
+\usepackage{float}
+\usepackage{enumitem}
+\SetKwInput{KwData}{Données}
+\SetKwInput{KwResult}{Résultat}
+\SetKwFor{Try}{Try}{}{}
+\SetKwFor{Catch}{Catch}{}{}
+
+% Listes : forcer les puces (points) à tous les niveaux
+\setlist[itemize,1]{label=$\bullet$}
+\setlist[itemize,2]{label=$\circ$}
+\setlist[itemize,3]{label=$\diamond$}
+
+% ─── Environnements de type article scientifique ─────────────────────────────
+\theoremstyle{definition}
+\newtheorem{definition}{Définition}[chapter]
+\newtheorem{hypothese}[definition]{Hypothèse}
+
+\theoremstyle{plain}
+\newtheorem{proposition}[definition]{Proposition}
+\newtheorem{lemme}[definition]{Lemme}
+\newtheorem{theoreme}[definition]{Théorème}
+
+% =============================================================================
+% MÉTADONNÉES — À modifier pour votre projet
+% =============================================================================
+
+\FirstAuthor{Groupe Systèmes Distribués, 4 GI}
+\FirstAuthorNumber{ENSPY-4GI}
+
+\Supervisor{Pr. Batchakui}
+\SupervisorTitle{Encadreur, ENSPY Yaoundé}
+
+\Title{Mutualisation des Ressources dans un Cluster de Virtualisation~: Conception et Implémentation de FusionCore}
+\Subtitle{Paging Distant, Ordonnancement Élastique et Migration Automatique sur Proxmox~VE}
+
+\University{École Nationale Supérieure Polytechnique de Yaoundé}
+\School{Département Génie Informatique}
+
+\Date{Yaoundé, \DTMmonthname{\month} \number\year}
+\AcademicYear{2025/26}
+
+% =============================================================================
+% GLOSSAIRE, ACRONYMES, SYMBOLES — directement ici
+% =============================================================================
+
+\makeglossaries
+
+%%% Glossaire %%%
+\newglossaryentry{paging-distant}{
+    name={Paging distant},
+    description={Mécanisme de déplacement des pages mémoire froides d'une VM vers la RAM d'un autre nœud du cluster, avec rappel transparent via \texttt{userfaultfd}.}
+}
+\newglossaryentry{eviction}{
+    name=Éviction,
+    description={Processus de sélection et d'envoi de pages mémoire froides vers un store distant pour libérer de la RAM locale.}
+}
+\newglossaryentry{noeud-store}{
+    name={Nœud store},
+    description={Nœud du cluster dont le rôle principal est de recevoir et stocker en RAM les pages distantes envoyées par d'autres nœuds.}
+}
+\newglossaryentry{hotplug}{
+    name=Hotplug,
+    description={Ajout ou retrait dynamique d'un processeur virtuel (vCPU) à une VM en cours d'exécution, sans la redémarrer, via le protocole QMP.}
+}
+\newglossaryentry{balloon}{
+    name=Balloon virtio,
+    description={Dispositif virtio permettant d'ajuster dynamiquement la quantité de RAM physique visible par un guest, en gonflant ou dégonflant un ballon logiciel.}
+}
+
+%%% Acronymes %%%
+\newacronym{vm}{VM}{Machine Virtuelle}
+\newacronym{kvm}{KVM}{Kernel-based Virtual Machine}
+\newacronym{qmp}{QMP}{QEMU Machine Protocol}
+\newacronym{tls}{TLS}{Transport Layer Security}
+\newacronym{tofu}{TOFU}{Trust On First Use}
+\newacronym{lru}{LRU}{Least Recently Used}
+\newacronym{ipc}{IPC}{Inter-Process Communication}
+\newacronym{psi}{PSI}{Pressure Stall Information}
+\newacronym{vram}{VRAM}{Video Random Access Memory}
+\newacronym{drm}{DRM}{Direct Rendering Manager}
+\newacronym{rbd}{RBD}{RADOS Block Device}
+\newacronym{pci}{PCI}{Peripheral Component Interconnect}
+\newacronym{api}{API}{Application Programming Interface}
+\newacronym{ram}{RAM}{Random Access Memory}
+\newacronym{cpu}{CPU}{Central Processing Unit}
+\newacronym{gpu}{GPU}{Graphics Processing Unit}
+\newacronym{vcpu}{vCPU}{Virtual Central Processing Unit}
+\newacronym{json}{JSON}{JavaScript Object Notation}
+\newacronym{http}{HTTP}{HyperText Transfer Protocol}
+\newacronym{tcp}{TCP}{Transmission Control Protocol}
+\newacronym{uffd}{UFFD}{userfaultfd, file descriptor d'interception des défauts de page}
+\newacronym{vfio}{VFIO}{Virtual Function I/O}
+\newacronym{mdev}{mdev}{Mediated Device}
+\newacronym{numa}{NUMA}{Non-Uniform Memory Access}
+\newacronym{iaas}{IaaS}{Infrastructure as a Service}
+\newacronym{ceph}{Ceph}{Système de stockage distribué Ceph}
+\newacronym{enspy}{ENSPY}{École Nationale Supérieure Polytechnique de Yaoundé}
+\newacronym{rdma}{RDMA}{Remote Direct Memory Access}
+\newacronym{mpi}{MPI}{Message Passing Interface}
+\newacronym{rest}{REST}{REpresentational State Transfer}
+\newacronym{ha}{HA}{High Availability}
+\newacronym{gbe}{GbE}{Gigabit Ethernet}
+\newacronym{ssh}{SSH}{Secure Shell}
+\newacronym{iso}{ISO}{Image disque ISO 9660}
+\newacronym{cubic}{CUBIC}{Custom Ubuntu ISO Creator}
+
+%%% Symboles %%%
+\newglossaryentry{max-mem}{
+    type=\symboltype,
+    name={\ensuremath{M_{\max}}},
+    description={Quota mémoire total alloué à une VM ($\texttt{local\_budget} + \texttt{remote\_budget}$)}
+}
+\newglossaryentry{score-placement}{
+    type=\symboltype,
+    name={\ensuremath{S(n)}},
+    description={Score de placement d'une VM sur le nœud $n$ (combinaison pondérée RAM, vCPU, topologie, migrations)}
+}
+\newglossaryentry{fault-rate}{
+    type=\symboltype,
+    name={\ensuremath{F_{\text{remote}}}},
+    description={Taux de défauts de page distants par seconde (utilisé par l'\texttt{AdaptiveInterval})}
+}
+
+% =============================================================================
+\begin{document}
+% =============================================================================
+
+% ─── COUVERTURE ──────────────────────────────────────────────────────────────
+
+\ifthenelse{\equal{\CoverOption}{classic}}{
+    \newcommand\BackgroundPicCover{%
+    \put(0,0){%
+    \parbox[b][\paperheight]{\paperwidth}{%
+    \vfill
+    \centering
+    \includegraphics[width=\paperwidth,height=\paperheight,keepaspectratio]{assets/Cover-BG.pdf}%
+    \vfill
+    }}}
+}{
+    \newcommand\BackgroundPicCover{%
+    \put(0,0){%
+    \parbox[b][\paperheight]{\paperwidth}{%
+    \vfill
+    \centering
+    \includegraphics[width=\paperwidth,height=\paperheight,keepaspectratio]{assets/Front-Page-BG.pdf}%
+    \vfill
+    }}}
+}
+
+\AddToShipoutPictureBG*{\BackgroundPicCover}
+
+\newgeometry{margin=1.98cm, top=2.15cm, bottom=1.47cm}
+\begin{titlepage}
+    \latofont
+    \ifthenelse{\equal{\CoverOption}{classic}}{\color{white}}{\color{frontpagedark}}
+    \vspace*{\baselineskip}
+
+    \begin{figure}
+        \includegraphics[width=0.34\linewidth]{assets/enspy.png}
+    \end{figure}
+
+    \vspace{5.5\baselineskip}
+
+    \noindent
+    \makebox[\textwidth][l]{%
+        \parbox{\dimexpr\textwidth-4cm\relax}{
+            \setstretch{1.03}
+            \raggedright\bfseries\fontsize{20}{26}\selectfont\GetTitle
+        }
+    }
+
+    \vspace{0.8\baselineskip}
+
+    \noindent
+    \makebox[\textwidth][l]{%
+        \parbox{\dimexpr\textwidth-7cm\relax}{
+            \setstretch{1.03}
+            \raggedright\fontsize{14}{19}\selectfont\GetSubtitle
+        }
+    }
+
+    \vspace{35pt}
+
+    {\noindent\bfseries\fontsize{14}{19}\selectfont\GetFirstAuthor}
+
+    \ifdefined\GetSecondAuthor
+        \vspace{8pt}
+        {\noindent\bfseries\fontsize{14}{19}\selectfont\GetSecondAuthor}
+    \fi
+
+    \ifdefined\GetThirdAuthor
+        \vspace{8pt}
+        {\noindent\bfseries\fontsize{14}{19}\selectfont\GetThirdAuthor}
+    \fi
+
+    \vfill
+
+    \ifthenelse{\equal{\DocStageOption}{working}}{
+        \vspace{62pt}
+        {\noindent\fontsize{10}{12}\selectfont\overwritecolor{yellow}{\GetDocumentVersion \\ \textit{\today}}}
+        \vspace{62pt}
+    }{
+        \vspace{125pt}
+    }
+
+    \vspace{68pt}
+\end{titlepage}
+\restoregeometry
+
+% ─── PAGE DE TITRE (FRONT PAGE) ─────────────────────────────────────────────
+
+\newcommand\BackgroundPicFrontPage{%
+    \put(0,0){%
+    \parbox[b][\paperheight]{\paperwidth}{%
+    \vfill
+    \centering
+    \includegraphics[width=\paperwidth,height=\paperheight,keepaspectratio]{assets/Front-Page-BG.pdf}%
+    \vfill
+}}}
+\AddToShipoutPictureBG*{\BackgroundPicFrontPage}
+
+\newgeometry{margin=1.98cm, top=2.15cm, bottom=1.47cm}
+\begin{titlepage}
+    \latofont
+    \color{frontpagedark}
+    \vspace*{\baselineskip}
+
+    \begin{figure}
+        \includegraphics[width=0.34\linewidth]{assets/enspy.png}
+    \end{figure}
+
+    \vspace{3.5\baselineskip}
+
+    \noindent
+    \makebox[\textwidth][l]{%
+        \parbox{\dimexpr\textwidth-2.5cm\relax}{
+            \setstretch{1.03}
+            \raggedright\bfseries\fontsize{20}{26}\selectfont\GetTitle
+        }
+    }
+
+    \vspace{0.8\baselineskip}
+
+    \noindent
+    \makebox[\textwidth][l]{%
+        \parbox{\dimexpr\textwidth-7cm\relax}{
+            \setstretch{1.03}
+            \raggedright\fontsize{14}{19}\selectfont\GetSubtitle
+        }
+    }
+
+    \vspace{35pt}
+
+    {\noindent\bfseries\fontsize{14}{19}\selectfont\GetFirstAuthor}
+
+    \ifdefined\GetSecondAuthor
+        \vspace{8pt}
+        {\noindent\bfseries\fontsize{14}{19}\selectfont\GetSecondAuthor}
+    \fi
+
+    \ifdefined\GetThirdAuthor
+        \vspace{8pt}
+        {\noindent\bfseries\fontsize{14}{19}\selectfont\GetThirdAuthor}
+    \fi
+
+    \vfill
+
+    {
+    \noindent
+    \latofont
+    \fontsize{10}{12}\selectfont
+    \renewcommand{\arraystretch}{0.1}
+    \hspace*{-2.5pt}\begin{tabular}{@{}r@{\hspace{5pt}}>{\raggedright\arraybackslash}m{6cm}@{}}
+        \textbf{Supervisor:} & \GetSupervisor \\ [-.7ex]
+        & \setstretch{0.9}{\fontsize{8}{10}\selectfont\itshape \GetSupervisorTitle} \\ [2ex]
+
+        \ifdefined\GetCoSupervisor
+            \textbf{Co-supervisor:} & \GetCoSupervisor \\ [-.7ex]
+            & \setstretch{0.9}{\fontsize{8}{10}\selectfont\itshape \GetCoSupervisorTitle} \\ [.5ex]
+        \fi
+
+        \ifdefined\GetSecCoSupervisor
+            & \GetSecCoSupervisor \\ [-.7ex]
+            & \setstretch{0.9}{\fontsize{8}{10}\selectfont\itshape \GetSecCoSupervisorTitle} \\
+        \fi
+    \end{tabular}
+    }
+
+    \vfill
+
+    \vspace{68pt}
+\end{titlepage}
+\restoregeometry
+
+% ─── NUMÉROTATION ROMAINE ───────────────────────────────────────────────────
+\pagenumbering{roman}
+
+% ─── REMERCIEMENTS ──────────────────────────────────────────────────────────
+
+\chapter*{Remerciements}
+\addcontentsline{toc}{chapter}{Remerciements}
+
+Ce rapport est l'aboutissement d'un travail d'ingénierie collectif mené dans le cadre du projet \emph{GRIDONE} de l'École Nationale Supérieure Polytechnique de Yaoundé. Nous tenons à exprimer notre profonde gratitude à toutes les personnes qui ont contribué à le rendre possible.
+
+Nos remerciements s'adressent en premier lieu au \textbf{Pr.~Batchakui}, notre encadreur, pour ses orientations méthodologiques, son accompagnement et ses remarques constructives qui ont guidé la conception et l'amélioration de \emph{FusionCore}.
+
+Nous remercions également l'ensemble de l'équipe pédagogique du Département de Génie Informatique de l'ENSPY pour le cadre de travail mis à notre disposition et la richesse des enseignements reçus tout au long du cycle d'ingénieur.
+
+Nos remerciements vont également aux ingénieurs porteurs du projet \emph{GRIDZERO}, Ing.~Alain Mbo, Ing.~Abel Zogning et Ing.~Nassair Foupouagnigni, pour le suivi régulier du projet, leurs regards sur l'état d'avancement, leurs conseils et leurs orientations tout au long de notre travail.
+
+\chapter*{Résumé}
+\addcontentsline{toc}{chapter}{Résumé}
+
+Dans un cluster Proxmox configuré de manière classique, les ressources matérielles restent principalement gérées au niveau de chaque nœud. Ainsi, une machine virtuelle peut être refusée sur un nœud saturé alors que d'autres nœuds du cluster disposent encore de ressources suffisantes. Cette situation limite l'exploitation globale du cluster et entraîne un gaspillage des capacités disponibles en mémoire vive, en processeurs, en accélérateurs graphiques et en entrées-sorties de stockage.
+
+\emph{FusionCore} est un système de mutualisation des ressources conçu pour améliorer l'utilisation d'un cluster Proxmox composé de trois nœuds ou plus, sans modification du code source du noyau Linux, de QEMU ni de Proxmox. Le système s'appuie sur un mécanisme de déplacement distant des pages mémoire peu utilisées, un ajustement dynamique des processeurs virtuels, une organisation contrôlée de l'accès aux accélérateurs graphiques et une politique de migration automatique. Pour la migration, les agents chargés de la mémoire, du processeur et de l'accélération graphique émettent des signaux selon leurs propres critères. L'agent de migration analyse ces signaux en tenant compte de l'état global du cluster afin de décider, lorsque cela est pertinent, d'une migration à chaud ou à froid.
+
+L'implémentation repose sur un démon écrit en Rust, déployé sur chaque nœud, et sur un contrôleur écrit en Python chargé de construire une vue globale du cluster. Les échanges entre nœuds utilisent un protocole dédié et sécurisé, tandis que l'intégration avec les machines virtuelles reste transparente pour l'utilisateur. Cette architecture permet de préserver la compatibilité avec les installations Proxmox existantes tout en améliorant l'exploitation collective des ressources disponibles.
+
+La validation du système s'appuie sur des tests automatisés, des scénarios de charge et des tableaux de bord de supervision. Les résultats présentés permettent d'évaluer le comportement de \emph{FusionCore} sous pression mémoire, lors de l'ajustement des ressources et pendant les opérations de migration. Ils montrent que l'approche proposée est pertinente pour un environnement académique cherchant à valoriser un ensemble de machines existantes au sein d'un cluster commun.
+
+\textbf{Mots-clés.} Virtualisation, cluster Proxmox, mutualisation des ressources, mémoire distante, ordonnancement dynamique, partage d'accélérateurs graphiques, migration automatique, supervision.
+
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+In a conventional Proxmox cluster, hardware resources are mainly managed at the level of each individual node. As a result, a virtual machine may be rejected on a saturated node even though other nodes in the cluster still have available capacity. This situation limits the overall use of the cluster and leads to wasted memory, processing power, graphics acceleration capacity and storage input--output resources.
+
+\emph{FusionCore} is a resource-pooling system designed to improve the use of a Proxmox cluster composed of three or more nodes, without modifying the source code of the Linux kernel, QEMU or Proxmox. The system relies on remote movement of rarely used memory pages, dynamic adjustment of virtual processors, controlled access to graphics accelerators and an automatic migration policy. For migration, the memory, processor and graphics acceleration agents send signals based on their own criteria. The migration agent then analyses these signals together with the global state of the cluster in order to decide, when relevant, whether a live or cold migration should be performed.
+
+The implementation is based on a Rust daemon deployed on each node and a Python controller responsible for building a global view of the cluster. Inter-node exchanges use a dedicated and secured protocol, while the integration with virtual machines remains transparent for the user. This architecture preserves compatibility with existing Proxmox installations while improving the collective use of available resources.
+
+The validation relies on automated tests, load scenarios and monitoring dashboards. The presented results make it possible to assess the behaviour of \emph{FusionCore} under memory pressure, during resource adjustment and during migration operations. They show that the proposed approach is relevant for an academic environment seeking to make better use of existing machines within a shared cluster.
+
+\textbf{Keywords.} Virtualization, Proxmox cluster, resource pooling, remote memory, dynamic scheduling, graphics accelerator sharing, automatic migration, monitoring.
+
+% ─── TABLES DES MATIÈRES, FIGURES, TABLEAUX ─────────────────────────────────
+
+\pdfbookmark[0]{Sommaire}{toc}
+\tableofcontents
+\listoffigures
+\listoftables
+
+% ─── LISTE DES ABRÉVIATIONS ────────────────────────────────────────────────
+
+\chapter*{Liste des abréviations}
+\addcontentsline{toc}{chapter}{Liste des abréviations}
+\markboth{\textit{Liste des abréviations}}{\textit{Liste des abréviations}}
+
+\begin{longtable}{lp{11cm}}
+\toprule
+\textbf{Abréviation} & \textbf{Signification} \\
+\midrule
+\endhead
+\acrshort{api}    & Application Programming Interface (interface de programmation) \\
+\acrshort{ceph}   & Système de stockage distribué Ceph \\
+\acrshort{cpu}    & Central Processing Unit (processeur) \\
+\acrshort{cubic}  & Custom Ubuntu ISO Creator (outil de personnalisation d'images Ubuntu) \\
+\acrshort{drm}    & Direct Rendering Manager (sous-système graphique Linux) \\
+\acrshort{enspy}  & École Nationale Supérieure Polytechnique de Yaoundé \\
+\acrshort{gbe}    & Gigabit Ethernet \\
+\acrshort{gpu}    & Graphics Processing Unit (accélérateur graphique) \\
+\acrshort{ha}     & High Availability (haute disponibilité) \\
+\acrshort{http}   & HyperText Transfer Protocol \\
+\acrshort{iaas}   & Infrastructure as a Service \\
+\acrshort{ipc}    & Inter-Process Communication \\
+\acrshort{iso}    & Image disque ISO 9660 \\
+\acrshort{json}   & JavaScript Object Notation \\
+\acrshort{kvm}    & Kernel-based Virtual Machine \\
+\acrshort{lru}    & Least Recently Used (politique de remplacement) \\
+\acrshort{mdev}   & Mediated Device \\
+\acrshort{mpi}    & Message Passing Interface \\
+\acrshort{numa}   & Non-Uniform Memory Access \\
+\acrshort{pci}    & Peripheral Component Interconnect \\
+\acrshort{psi}    & Pressure Stall Information (pression noyau Linux) \\
+\acrshort{qmp}    & QEMU Machine Protocol \\
+\acrshort{ram}    & Random Access Memory (mémoire vive) \\
+\acrshort{rbd}    & RADOS Block Device (disque virtuel Ceph) \\
+\acrshort{rdma}   & Remote Direct Memory Access \\
+\acrshort{rest}   & REpresentational State Transfer \\
+\acrshort{ssh}    & Secure Shell \\
+\acrshort{tcp}    & Transmission Control Protocol \\
+\acrshort{tls}    & Transport Layer Security (chiffrement de canal) \\
+\acrshort{tofu}   & Trust On First Use (modèle de confiance à la première connexion) \\
+\acrshort{uffd}   & userfaultfd (file descriptor d'interception des défauts de page) \\
+\acrshort{vcpu}   & Virtual Central Processing Unit (processeur virtuel) \\
+\acrshort{vfio}   & Virtual Function I/O \\
+\acrshort{vm}     & Virtual Machine (machine virtuelle) \\
+\acrshort{vram}   & Video Random Access Memory (mémoire vidéo) \\
+\bottomrule
+\end{longtable}
+
+\noindent\textbf{Acronymes propres au projet et aux équipes du programme GRIDONE :}
+
+\begin{longtable}{lp{11cm}}
+\toprule
+\textbf{Sigle} & \textbf{Signification} \\
+\midrule
+\endhead
+GRIDZERO    & Programme initial d'agrégation des machines existantes en cluster commun à l'ENSPY \\
+GRIDONE     & Continuité de GRIDZERO, structuration et élargissement de l'exploitation collective des ressources \\
+ATLAS       & Équipe \emph{IronGrid}, infrastructure physique du cluster et supervision \\
+OMEGA       & Équipe \emph{FusionCore}, mutualisation des ressources et bibliothèque d'images \\
+SIGMA       & Équipe \emph{Horizon}, portail web de réservation des machines virtuelles \\
+ORION       & Équipe \emph{Parallax}, calcul distribué et frameworks de parallélisation \\
+FusionCore  & Système conçu et implémenté par l'équipe OMEGA, objet du présent rapport \\
+BDI         & Belief--Desire--Intention (architecture cognitive d'agent) \\
+FIPA        & Foundation for Intelligent Physical Agents (norme de communication agents) \\
+ACL         & Agent Communication Language (langage de communication FIPA) \\
+SMA         & Système Multi-Agents \\
+\bottomrule
+\end{longtable}
+
+%%% Acronymes %%%
+\acronymtoc\printacronymglossary
+
+%%% Symboles %%%
+\symboltoc\printsymbolglossary
+
+% ─── NUMÉROTATION ARABE ────────────────────────────────────────────────────
+\pagenumbering{arabic}
+
+% =============================================================================
+% CHAPITRES
+% =============================================================================
+
+\include{chapters/00-Introduction}
+\include{chapters/01-Etat-Art}
+\include{chapters/02-Vue-SMA}
+\include{chapters/03-Conception}
+\include{chapters/04-Implementation}
+\include{chapters/05-Conclusion}
+
+% =============================================================================
+% BIBLIOGRAPHIE
+% =============================================================================
+
+\printbibliography[title={Bibliographie},heading=bibintoc]
+
+% =============================================================================
+% ANNEXES
+% =============================================================================
+
+\appendix
+\include{chapters/A1-Annexe-Protocole}
+\include{chapters/A2-Annexe-API}
+\include{chapters/A3-Annexe-Metriques}
+\include{chapters/A4-Annexe-ISO}
+
+\end{document}
